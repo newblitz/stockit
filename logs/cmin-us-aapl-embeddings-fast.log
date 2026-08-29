@@ -1,0 +1,25 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/284 [00:00<?, ?it/s]Loading weights: 100%|██████████| 284/284 [00:00<00:00, 23801.27it/s]
+[transformers] The tied weights mapping and config for this model specifies to tie shared.weight to lm_head.weight, but both are present in the checkpoints with different values, so we will NOT tie them. You should update the config with `tie_word_embeddings=False` to silence this warning.
+AAPL: 50/1002 days (19s)
+AAPL: 100/1002 days (39s)
+AAPL: 150/1002 days (58s)
+AAPL: 200/1002 days (80s)
+AAPL: 250/1002 days (106s)
+AAPL: 300/1002 days (129s)
+AAPL: 350/1002 days (151s)
+AAPL: 400/1002 days (173s)
+AAPL: 450/1002 days (198s)
+AAPL: 500/1002 days (218s)
+AAPL: 550/1002 days (236s)
+AAPL: 600/1002 days (255s)
+AAPL: 650/1002 days (275s)
+AAPL: 700/1002 days (290s)
+AAPL: 750/1002 days (309s)
+AAPL: 800/1002 days (325s)
+AAPL: 850/1002 days (339s)
+AAPL: 900/1002 days (354s)
+AAPL: 950/1002 days (368s)
+AAPL: 1000/1002 days (384s)
+AAPL: 1002/1002 days (385s)
+saved data/cache/cmin-us-mt5/AAPL.pt

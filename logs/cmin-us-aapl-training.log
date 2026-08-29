@@ -1,0 +1,28 @@
+Training on cpu: train=597, validation=128, price_dim=6, text_dim=768
+Training on cpu: train=597, validation=128, price_dim=6, text_dim=768
+Epoch 001/20 | 3.4s | train loss 0.7206, acc 0.5293, MCC 0.0409 | val loss 0.7858, acc 0.5469, MCC 0.0960 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 001/20 | 3.4s | train loss 0.7206, acc 0.5293, MCC 0.0409 | val loss 0.7858, acc 0.5469, MCC 0.0960 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 002/20 | 3.5s | train loss 0.7188, acc 0.5260, MCC 0.0257 | val loss 0.7358, acc 0.5234, MCC -0.0228 | lr 1.00e-04
+Epoch 002/20 | 3.5s | train loss 0.7188, acc 0.5260, MCC 0.0257 | val loss 0.7358, acc 0.5234, MCC -0.0228 | lr 1.00e-04
+Epoch 003/20 | 3.3s | train loss 0.6773, acc 0.5745, MCC 0.1170 | val loss 0.7207, acc 0.5312, MCC 0.0283 | lr 1.00e-04
+Epoch 003/20 | 3.3s | train loss 0.6773, acc 0.5745, MCC 0.1170 | val loss 0.7207, acc 0.5312, MCC 0.0283 | lr 1.00e-04
+Epoch 004/20 | 3.3s | train loss 0.6675, acc 0.6097, MCC 0.1978 | val loss 0.7254, acc 0.4531, MCC -0.0760 | lr 1.00e-04
+Epoch 004/20 | 3.3s | train loss 0.6675, acc 0.6097, MCC 0.1978 | val loss 0.7254, acc 0.4531, MCC -0.0760 | lr 1.00e-04
+Epoch 005/20 | 3.3s | train loss 0.6592, acc 0.6231, MCC 0.2289 | val loss 0.7856, acc 0.4297, MCC -0.1188 | lr 1.00e-04
+Epoch 005/20 | 3.3s | train loss 0.6592, acc 0.6231, MCC 0.2289 | val loss 0.7856, acc 0.4297, MCC -0.1188 | lr 1.00e-04
+Epoch 006/20 | 3.5s | train loss 0.6577, acc 0.5963, MCC 0.1789 | val loss 0.7363, acc 0.5625, MCC 0.0992 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 006/20 | 3.5s | train loss 0.6577, acc 0.5963, MCC 0.1789 | val loss 0.7363, acc 0.5625, MCC 0.0992 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 007/20 | 3.4s | train loss 0.6416, acc 0.6231, MCC 0.2291 | val loss 0.7523, acc 0.5703, MCC 0.1173 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 007/20 | 3.4s | train loss 0.6416, acc 0.6231, MCC 0.2291 | val loss 0.7523, acc 0.5703, MCC 0.1173 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 008/20 | 3.4s | train loss 0.6330, acc 0.6315, MCC 0.2482 | val loss 0.7404, acc 0.4922, MCC -0.0364 | lr 1.00e-04
+Epoch 008/20 | 3.4s | train loss 0.6330, acc 0.6315, MCC 0.2482 | val loss 0.7404, acc 0.4922, MCC -0.0364 | lr 1.00e-04
+Epoch 009/20 | 3.6s | train loss 0.6086, acc 0.6784, MCC 0.3450 | val loss 0.7448, acc 0.5469, MCC 0.0798 | lr 1.00e-04
+Epoch 009/20 | 3.6s | train loss 0.6086, acc 0.6784, MCC 0.3450 | val loss 0.7448, acc 0.5469, MCC 0.0798 | lr 1.00e-04
+Epoch 010/20 | 3.4s | train loss 0.6089, acc 0.6734, MCC 0.3341 | val loss 0.7496, acc 0.5000, MCC -0.0061 | lr 1.00e-04
+Epoch 010/20 | 3.4s | train loss 0.6089, acc 0.6734, MCC 0.3341 | val loss 0.7496, acc 0.5000, MCC -0.0061 | lr 1.00e-04
+Epoch 011/20 | 3.4s | train loss 0.5950, acc 0.6884, MCC 0.3657 | val loss 0.7472, acc 0.5078, MCC 0.0132 | lr 1.00e-04
+Epoch 011/20 | 3.4s | train loss 0.5950, acc 0.6884, MCC 0.3657 | val loss 0.7472, acc 0.5078, MCC 0.0132 | lr 1.00e-04
+Epoch 012/20 | 3.4s | train loss 0.5826, acc 0.7002, MCC 0.3899 | val loss 0.7586, acc 0.5547, MCC 0.0866 | lr 1.00e-04
+Epoch 012/20 | 3.4s | train loss 0.5826, acc 0.7002, MCC 0.3899 | val loss 0.7586, acc 0.5547, MCC 0.0866 | lr 1.00e-04
+Early stopping after 5 epochs without validation-MCC improvement.
+Early stopping after 5 epochs without validation-MCC improvement.

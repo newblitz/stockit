@@ -22,9 +22,11 @@ class Config:
     lr: float = 1e-4
     lr_decay: float = 1e-4
     lr_decay_epoch: int = 5
-    epochs: int = 20
+    epochs: int = 100
     batch_size: int = 16
-    patience: int = 5
+    # Set patience to 0 to disable early stopping; otherwise stop after this many
+    # epochs without validation-MCC improvement.
+    patience: int = 0
 
     # LLM
     llm_model: str = "csebuetnlp/mT5_multilingual_XLSum"

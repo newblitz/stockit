@@ -60,6 +60,65 @@ the official six numerical price columns. As written, `python main.py` is not
 the supported command and may fail. Do not mix its data loader or checkpoints
 with the root-level `train.py` pipeline.
 
+## Repository file structure
+
+```text
+major/
+├── README.md                    # Project overview and handoff notes (this file)
+├── HOW_TO_RUN.md                # Step-by-step run instructions (local + Kaggle)
+├── requirements.txt             # Python dependencies
+├── config.py                    # Paper-default hyperparameters
+│
+├── prepare_embeddings.py        # Step 1: build frozen mT5 text-embedding caches
+├── train.py                     # Step 2: train/validate the co-attention model
+├── main.py                      # LEGACY — do not use
+│
+├── src/
+│   ├── __init__.py
+│   ├── model.py                 # HierarchicalCoAttentionStockPredictor (canonical)
+│   ├── data.py                  # CMIN loader, splits, 30-day windows (canonical)
+│   ├── summarization.py         # HierarchicalSummarizer / Algorithm 1 (canonical)
+│   ├── dataset.py               # LEGACY — old data loader
+│   ├── train.py                 # LEGACY — old training loop
+│   └── technical_indicators.py  # LEGACY — 17 engineered indicators
+│
+├── tests/
+│   └── test_model.py            # Shape and backward-pass smoke tests
+│
+├── paper/
+│   ├── paper.md                 # Local copy of the paper
+│   └── fig*.png                 # Paper figures
+│
+├── data/
+│   ├── CMIN-Dataset-official/   # Official CMIN download (default dataset root)
+│   │   └── CMIN-US/
+│   │       ├── price/
+│   │       │   ├── processed/   # <TICKER>.txt — one row per trading day
+│   │       │   └── raw/         # Raw price CSVs (not used by train.py)
+│   │       └── news/
+│   │           ├── preprocessed/# <TICKER>/<YYYY-MM-DD> — JSONL news per day
+│   │           └── raw/         # Raw news CSVs (not used by train.py)
+│   └── cache/
+│       └── cmin-us-mt5/         # Precomputed text embeddings (created by prepare_embeddings.py)
+│           └── <TICKER>.pt      # {dates, embeddings [trading_days, 768]}
+│
+├── checkpoints/
+│   └── cmin-us/                 # Training outputs (created by train.py)
+│       ├── best.pt              # Best by validation MCC (primary checkpoint)
+│       ├── best_accuracy.pt     # Best by validation accuracy
+│       ├── last.pt              # Most recent epoch
+│       ├── history.json         # Per-epoch metrics
+│       ├── history.csv          # Same metrics, spreadsheet-friendly
+│       └── metrics.json         # Final epoch summary
+│
+└── logs/                        # Optional training/embedding logs (--log-file)
+```
+
+Paths under `data/`, `checkpoints/`, and `logs/` are created at runtime and may
+be empty in a fresh clone. Override dataset, cache, and checkpoint locations with
+`--dataset-root`, `--cache-root`, and `--checkpoint-dir` (see
+[`HOW_TO_RUN.md`](HOW_TO_RUN.md)).
+
 ## Model mapping to the paper
 
 `src/model.py` implements the following paper components.

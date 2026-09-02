@@ -88,6 +88,12 @@ def main() -> None:
     parser.add_argument("--cache-root", type=Path, default=Path("data/cache/cmin-us-mt5"))
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints/cmin-us"))
     parser.add_argument("--epochs", type=int, default=Config.epochs)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=Config.patience,
+        help="stop after N epochs without validation-MCC improvement (0 disables early stopping)",
+    )
     parser.add_argument("--batch-size", type=int, default=Config.batch_size)
     parser.add_argument("--max-stocks", type=int, help="use a small subset for a smoke run")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -99,6 +105,8 @@ def main() -> None:
         sys.stdout = Tee(sys.stdout, args.log_file)  # type: ignore[assignment]
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     config = Config()
+    config.epochs = args.epochs
+    config.patience = args.patience
     train_set = CMINWindowDataset(args.dataset_root, args.cache_root, "train", seq_len=config.seq_len, max_stocks=args.max_stocks)
     val_set = CMINWindowDataset(args.dataset_root, args.cache_root, "val", seq_len=config.seq_len, max_stocks=args.max_stocks)
     model = HierarchicalCoAttentionStockPredictor(
@@ -184,7 +192,7 @@ def main() -> None:
             f"lr {result['learning_rate']:.2e}" + (" | " + ", ".join(tags) if tags else ""),
             flush=True,
         )
-        if stale_epochs >= config.patience:
+        if config.patience > 0 and stale_epochs >= config.patience:
             print(f"Early stopping after {config.patience} epochs without validation-MCC improvement.", flush=True)
             break
     (args.checkpoint_dir / "metrics.json").write_text(json.dumps(history[-1], indent=2) + "\n")

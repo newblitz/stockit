@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -77,7 +78,14 @@ def load_stock_series(dataset_root: str | Path, cache_root: str | Path, ticker: 
 
 
 class CMINWindowDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
-    """30-day samples with next-trading-day movement labels (Eq. 17)."""
+    """30-day samples with next-trading-day movement labels (Eq. 17).
+
+    Tickers whose embedding cache (``.pt``) has not yet been built are
+    automatically skipped with a warning so that training can proceed on
+    the subset of stocks that have already been embedded.  Run
+    ``prepare_embeddings.py`` (without ``--ticker``) to build caches for
+    all 110 CMIN-US tickers and then retrain on the full dataset.
+    """
 
     def __init__(
         self,
@@ -99,10 +107,25 @@ class CMINWindowDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
         self.samples: list[tuple[Tensor, Tensor, Tensor]] = []
         self.price_dim: int | None = None
         self.text_embedding_dim: int | None = None
+        loaded_tickers: list[str] = []
+        skipped_tickers: list[str] = []
         for ticker in tickers:
-            series = load_stock_series(dataset_root, cache_root, ticker)
+            cache_file = Path(cache_root) / f"{ticker}.pt"
+            if not cache_file.exists():
+                skipped_tickers.append(ticker)
+                continue
+            try:
+                series = load_stock_series(dataset_root, cache_root, ticker)
+            except Exception as exc:
+                warnings.warn(
+                    f"Skipping {ticker}: failed to load — {exc}",
+                    stacklevel=2,
+                )
+                skipped_tickers.append(ticker)
+                continue
             self.price_dim = series.features.shape[1]
             self.text_embedding_dim = series.embeddings.shape[1]
+            loaded_tickers.append(ticker)
             # i is the final observed day; its next day supplies the target.
             for i in range(seq_len - 1, len(series.dates) - 1):
                 target_day = series.dates[i + 1]
@@ -112,8 +135,25 @@ class CMINWindowDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
                     # Column zero is the supplied close-to-close movement percentage.
                     label = torch.tensor([float(series.movements[i + 1] > 0)], dtype=torch.float32)
                     self.samples.append((price_window, text_window, label))
+        if skipped_tickers:
+            warnings.warn(
+                f"{len(skipped_tickers)} ticker(s) skipped (missing embedding cache): "
+                f"{skipped_tickers[:10]}{'...' if len(skipped_tickers) > 10 else ''}. "
+                "Run `python prepare_embeddings.py` to build all caches before training "
+                "on the full dataset.",
+                stacklevel=2,
+            )
+        print(
+            f"CMINWindowDataset [{split}]: loaded {len(loaded_tickers)} tickers, "
+            f"skipped {len(skipped_tickers)}, total {split} samples: {len(self.samples):,}",
+            flush=True,
+        )
         if not self.samples:
-            raise ValueError(f"no {split} samples were built")
+            raise ValueError(
+                f"no {split} samples were built. "
+                "Ensure embedding caches exist for at least one ticker "
+                "(run `python prepare_embeddings.py`)."
+            )
         assert self.price_dim is not None and self.text_embedding_dim is not None
 
     def __len__(self) -> int:

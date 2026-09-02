@@ -1,0 +1,54 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── ML artefacts (large binaries — do NOT commit) ─────────────────────────
+# Pre-computed mT5 embedding caches
+data/cache/
+
+# Model checkpoints
+checkpoints/
+
+# Training logs
+logs/
+
+# ── Dataset: CMIN-Dataset-official ────────────────────────────────────────
+# This is a sparse-checkout clone of github.com/BigRoddy/CMIN-Dataset.
+# It is a nested git repository and must NOT be committed as a submodule.
+# Clone it locally with the commands in README.md / HOW_TO_RUN.md.
+data/CMIN-Dataset-official/
+
+# ── macOS ─────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# ── IDE / editors ─────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Pytest / coverage ─────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

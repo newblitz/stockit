@@ -22,6 +22,7 @@ import torch
 from torch import Tensor, nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from config import Config
 from src.data import CMINWindowDataset
@@ -116,6 +117,12 @@ def main() -> None:
             "and best-MCC/accuracy thresholds so training continues seamlessly."
         ),
     )
+    parser.add_argument(
+        "--tensorboard-dir",
+        type=Path,
+        default=Path("runs/cmin-us"),
+        help="Directory to save TensorBoard logs (set to empty string to disable)",
+    )
     args = parser.parse_args()
 
     if args.log_file:
@@ -146,6 +153,12 @@ def main() -> None:
     criterion    = nn.BCEWithLogitsLoss()
 
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    
+    if args.tensorboard_dir and str(args.tensorboard_dir) != "":
+        args.tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(args.tensorboard_dir))
+    else:
+        writer = None
 
     # ── Resume from last.pt if requested ────────────────────────────────────
     start_epoch   = 1
@@ -226,6 +239,17 @@ def main() -> None:
             "val_mcc": validation["mcc"],
         }
         history.append(result)
+        
+        if writer:
+            writer.add_scalar("Loss/train", result["train_loss"], epoch)
+            writer.add_scalar("Accuracy/train", result["train_accuracy"], epoch)
+            writer.add_scalar("MCC/train", result["train_mcc"], epoch)
+            writer.add_scalar("Loss/val", result["val_loss"], epoch)
+            writer.add_scalar("Accuracy/val", result["val_accuracy"], epoch)
+            writer.add_scalar("MCC/val", result["val_mcc"], epoch)
+            writer.add_scalar("Learning_Rate", result["learning_rate"], epoch)
+            writer.flush()
+
         checkpoint(
             last_ckpt, model=model, optimizer=optimizer, epoch=epoch,
             config=config, result=result, history=history,
@@ -267,6 +291,8 @@ def main() -> None:
             break
 
     (args.checkpoint_dir / "metrics.json").write_text(json.dumps(history[-1], indent=2) + "\n")
+    if writer:
+        writer.close()
 
 
 if __name__ == "__main__":

@@ -213,18 +213,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Persist / restore Kaggle training artifacts across sessions."
     )
-    parser.add_argument(
+    
+    # Common arguments for both save and restore
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--dataset",
         required=True,
         metavar="USERNAME/DATASET-NAME",
         help="Kaggle Dataset slug to push to / pull from, e.g. johnsmith/stockit-artifacts",
     )
-    parser.add_argument(
+    common.add_argument(
         "--cache-root",
         default="/kaggle/working/cache/cmin-us-mt5",
         help="Path to the mT5 embedding cache directory.",
     )
-    parser.add_argument(
+    common.add_argument(
         "--checkpoint-dir",
         default="/kaggle/working/checkpoints/cmin-us",
         help="Path to the checkpoint directory.",
@@ -232,14 +235,14 @@ def main() -> None:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    save_p = sub.add_parser("save", help="Upload artifacts to a Kaggle Dataset.")
+    save_p = sub.add_parser("save", parents=[common], help="Upload artifacts to a Kaggle Dataset.")
     save_p.add_argument(
         "-m", "--message",
         default="checkpoint update",
         help="Version message for the Kaggle Dataset.",
     )
 
-    sub.add_parser("restore", help="Download artifacts from a Kaggle Dataset.")
+    sub.add_parser("restore", parents=[common], help="Download artifacts from a Kaggle Dataset.")
 
     args = parser.parse_args()
     if args.command == "save":

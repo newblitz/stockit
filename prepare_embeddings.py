@@ -91,12 +91,6 @@ def main() -> None:
         help="Ticker(s) to process; may be repeated (default: all tickers).",
     )
     parser.add_argument(
-        "--stock-offset",
-        type=int,
-        default=0,
-        help="Skip the first N tickers alphabetically (useful with --max-stocks for chunking).",
-    )
-    parser.add_argument(
         "--max-stocks",
         type=int,
         help="Process only the first N tickers alphabetically (useful for smoke tests).",
@@ -113,8 +107,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tickers: list[str] = args.ticker or available_tickers(args.dataset_root)
-    if args.stock_offset > 0:
-        tickers = tickers[args.stock_offset :]
+ 
     if args.max_stocks is not None:
         tickers = tickers[: args.max_stocks]
 

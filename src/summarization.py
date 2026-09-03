@@ -27,7 +27,7 @@ class HierarchicalSummarizer:
         except ImportError as exc:  # pragma: no cover - depends on optional package
             raise ImportError("Install `transformers` to use HierarchicalSummarizer.") from exc
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=torch.float32)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
         self.model.eval().requires_grad_(False)
         self.max_length = max_length
         self.summary_max_new_tokens = summary_max_new_tokens

@@ -123,6 +123,12 @@ def main() -> None:
         default=Path("runs/cmin-us"),
         help="Directory to save TensorBoard logs (set to empty string to disable)",
     )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=5,
+        help="Save a periodic checkpoint every N epochs inside --checkpoint-dir/periodic/ (0 disables).",
+    )
     args = parser.parse_args()
 
     if args.log_file:
@@ -156,9 +162,13 @@ def main() -> None:
     
     if args.tensorboard_dir and str(args.tensorboard_dir) != "":
         args.tensorboard_dir.mkdir(parents=True, exist_ok=True)
-        writer = SummaryWriter(log_dir=str(args.tensorboard_dir))
+        tb_writer = SummaryWriter(log_dir=str(args.tensorboard_dir))
     else:
-        writer = None
+        tb_writer = None
+
+    periodic_dir = args.checkpoint_dir / "periodic"
+    if args.checkpoint_interval > 0:
+        periodic_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Resume from last.pt if requested ────────────────────────────────────
     start_epoch   = 1
@@ -240,15 +250,16 @@ def main() -> None:
         }
         history.append(result)
         
-        if writer:
-            writer.add_scalar("Loss/train", result["train_loss"], epoch)
-            writer.add_scalar("Accuracy/train", result["train_accuracy"], epoch)
-            writer.add_scalar("MCC/train", result["train_mcc"], epoch)
-            writer.add_scalar("Loss/val", result["val_loss"], epoch)
-            writer.add_scalar("Accuracy/val", result["val_accuracy"], epoch)
-            writer.add_scalar("MCC/val", result["val_mcc"], epoch)
-            writer.add_scalar("Learning_Rate", result["learning_rate"], epoch)
-            writer.flush()
+        if tb_writer:
+            tb_writer.add_scalar("Loss/train",       result["train_loss"],     epoch)
+            tb_writer.add_scalar("Loss/val",          result["val_loss"],       epoch)
+            tb_writer.add_scalar("Accuracy/train",    result["train_accuracy"], epoch)
+            tb_writer.add_scalar("Accuracy/val",      result["val_accuracy"],   epoch)
+            tb_writer.add_scalar("MCC/train",         result["train_mcc"],      epoch)
+            tb_writer.add_scalar("MCC/val",           result["val_mcc"],        epoch)
+            tb_writer.add_scalar("Learning_Rate",     result["learning_rate"],  epoch)
+            tb_writer.add_scalar("Epoch_Time_s",      result["elapsed_seconds"],epoch)
+            tb_writer.flush()
 
         checkpoint(
             last_ckpt, model=model, optimizer=optimizer, epoch=epoch,
@@ -272,13 +283,20 @@ def main() -> None:
             )
         (args.checkpoint_dir / "history.json").write_text(json.dumps(history, indent=2) + "\n")
         with (args.checkpoint_dir / "history.csv").open("w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(file, fieldnames=list(result))
-            writer.writeheader(); writer.writerows(history)
+            csv_writer = csv.DictWriter(file, fieldnames=list(result))
+            csv_writer.writeheader(); csv_writer.writerows(history)
         tags = []
         if is_best_mcc:
             tags.append("saved best.pt (MCC)")
         if is_best_accuracy:
             tags.append("saved best_accuracy.pt")
+        if args.checkpoint_interval > 0 and epoch % args.checkpoint_interval == 0:
+            periodic_path = periodic_dir / f"epoch_{epoch:03d}.pt"
+            checkpoint(
+                periodic_path, model=model, optimizer=optimizer, epoch=epoch,
+                config=config, result=result, history=history,
+            )
+            tags.append(f"saved periodic/epoch_{epoch:03d}.pt")
         print(
             f"Epoch {epoch:03d}/{args.epochs} | {result['elapsed_seconds']:.1f}s | "
             f"train loss {result['train_loss']:.4f}, acc {result['train_accuracy']:.4f}, MCC {result['train_mcc']:.4f} | "
@@ -291,8 +309,8 @@ def main() -> None:
             break
 
     (args.checkpoint_dir / "metrics.json").write_text(json.dumps(history[-1], indent=2) + "\n")
-    if writer:
-        writer.close()
+    if tb_writer:
+        tb_writer.close()
 
 
 if __name__ == "__main__":

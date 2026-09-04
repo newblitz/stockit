@@ -22,7 +22,7 @@ ENV/
 
 # ── ML artefacts (large binaries — do NOT commit) ─────────────────────────
 # Pre-computed mT5 embedding caches
-data/cache/
+
 
 # Model checkpoints
 checkpoints/

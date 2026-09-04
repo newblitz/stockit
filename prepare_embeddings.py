@@ -131,21 +131,57 @@ def embed_ticker(
     dataset_root: Path,
     cache_root: Path,
     summarizer: HierarchicalSummarizer,
+    partial_save_interval: int = 100,
 ) -> None:
-    """Build and save the embedding cache for a single ticker."""
+    """Build and save the embedding cache for a single ticker.
+
+    Each stock's final embedding is written to ``<cache_root>/<TICKER>.pt``
+    immediately after all its trading days are processed — not at the end of
+    the whole shard — so a completed stock is never reprocessed on resume.
+
+    Intra-stock resumability: a ``<TICKER>.partial.pt`` file is written every
+    ``partial_save_interval`` days.  If the process is interrupted mid-stock,
+    the next run picks up from the last partial checkpoint instead of day 1.
+    The partial file is deleted once the final ``.pt`` is saved.
+    """
     days, _ = _read_prices(dataset_root / "price" / "processed" / f"{ticker}.txt")
     documents = hourly_documents(dataset_root / "news" / "preprocessed" / ticker, days)
-    embeddings = []
-    for index, day_documents in enumerate(documents, start=1):
+    total_days = len(days)
+
+    output  = cache_root / f"{ticker}.pt"
+    partial = cache_root / f"{ticker}.partial.pt"
+
+    # ── Resume from partial checkpoint if available ───────────────────────────
+    start = 0
+    embeddings: list[torch.Tensor] = []
+    if partial.exists():
+        saved = torch.load(partial, map_location="cpu", weights_only=False)
+        embeddings = list(saved["embeddings"])   # Tensor → list for appending
+        start = len(embeddings)
+        print(f"  {ticker}: resuming from day {start + 1}/{total_days} (partial checkpoint found)", flush=True)
+
+    for index, day_documents in enumerate(documents[start:], start=start + 1):
         _, embedding = summarizer.summarize_and_embed(day_documents)
         embeddings.append(embedding)
-        if index % 25 == 0 or index == len(documents):
-            print(f"  {ticker}: {index}/{len(documents)} days embedded", flush=True)
-    output = cache_root / f"{ticker}.pt"
+
+        if index % 25 == 0 or index == total_days:
+            print(f"  {ticker}: {index}/{total_days} days embedded", flush=True)
+
+        # ── Save partial checkpoint (intra-stock, for session-expiry resilience) ──
+        if partial_save_interval > 0 and index % partial_save_interval == 0 and index < total_days:
+            torch.save(
+                {"dates": [d.isoformat() for d in days[:index]], "embeddings": torch.stack(embeddings)},
+                partial,
+            )
+            print(f"  {ticker}: partial checkpoint saved at day {index}/{total_days}", flush=True)
+
+    # ── All days done: write final file and clean up partial ─────────────────
     torch.save(
         {"dates": [day.isoformat() for day in days], "embeddings": torch.stack(embeddings)},
         output,
     )
+    if partial.exists():
+        partial.unlink()
     print(f"  saved {output}", flush=True)
 
 
@@ -176,17 +212,26 @@ def _select_tickers(args: argparse.Namespace) -> list[str]:
 
 
 def _print_status(tickers: list[str], cache_root: Path, shard_total: int | None) -> None:
-    """Print done/pending counts and, when relevant, copy-paste shard commands."""
+    """Print done/partial/pending counts and, when relevant, copy-paste shard commands."""
     done    = [t for t in tickers if (cache_root / f"{t}.pt").exists()]
-    pending = [t for t in tickers if not (cache_root / f"{t}.pt").exists()]
-    print(f"\nStatus — {len(tickers)} ticker(s) in scope: {len(done)} done, {len(pending)} pending")
+    partial = [t for t in tickers if (cache_root / f"{t}.partial.pt").exists()
+               and not (cache_root / f"{t}.pt").exists()]
+    pending = [t for t in tickers if not (cache_root / f"{t}.pt").exists()
+               and not (cache_root / f"{t}.partial.pt").exists()]
+    print(
+        f"\nStatus — {len(tickers)} ticker(s) in scope: "
+        f"{len(done)} done, {len(partial)} partial (will resume), {len(pending)} not started"
+    )
+    if partial:
+        print(f"\nPartial — interrupted mid-stock, will auto-resume ({len(partial)}): {' '.join(partial)}")
     if pending:
-        print(f"\nPending ({len(pending)}): {' '.join(pending)}")
+        print(f"\nNot started ({len(pending)}): {' '.join(pending)}")
     print(f"\nDone ({len(done)}): {' '.join(done) if done else 'none'}")
-    if pending and shard_total is None:
-        # Suggest parallel shard commands only for a full-list status call
-        suggested = min(4, len(pending))
-        print(f"\nTo split into {suggested} parallel shards (run each on a separate cloud instance):")
+    if (pending or partial) and shard_total is None:
+        # Suggest parallel shard commands only for a full-list status call.
+        # Target ~15 stocks per shard.
+        suggested = max(1, min(math.ceil(len(tickers) / 15), 8))
+        print(f"\nTo split into {suggested} parallel shards (~15 stocks each):")
         for i in range(suggested):
             print(f"  python prepare_embeddings.py --shard {i} {suggested} --device cuda")
     print()
@@ -201,17 +246,17 @@ examples:
   # check overall progress without loading the model
   python prepare_embeddings.py --status
 
-  # run four parallel Kaggle/cloud notebooks covering all 110 tickers
-  python prepare_embeddings.py --shard 0 4 --device cuda
-  python prepare_embeddings.py --shard 1 4 --device cuda
-  python prepare_embeddings.py --shard 2 4 --device cuda
-  python prepare_embeddings.py --shard 3 4 --device cuda
+  # run 8 parallel Kaggle/cloud notebooks (~14 stocks each)
+  python prepare_embeddings.py --shard 0 8 --device cuda
+  python prepare_embeddings.py --shard 1 8 --device cuda
+  ...up to...
+  python prepare_embeddings.py --shard 7 8 --device cuda
 
   # process specific tickers on any cloud instance
   python prepare_embeddings.py --ticker AAPL --ticker MSFT --device cuda
 
-  # resume: already-cached tickers are skipped automatically
-  python prepare_embeddings.py --shard 0 4 --device cuda
+  # resume: completed tickers are skipped; interrupted stocks resume from partial checkpoint
+  python prepare_embeddings.py --shard 0 8 --device cuda
 """,
     )
     parser.add_argument(
@@ -240,9 +285,18 @@ examples:
         metavar=("INDEX", "TOTAL"),
         help=(
             "Divide all tickers into TOTAL equal chunks and process chunk INDEX (0-indexed). "
-            "Use this to run parallel cloud jobs: --shard 0 4, --shard 1 4, … --shard 3 4. "
-            "Already-cached tickers within the shard are skipped automatically so each job "
-            "is safely resumable."
+            "Use --shard 0 8 … --shard 7 8 for 8 parallel cloud jobs (~14 stocks each). "
+            "Completed tickers are skipped; interrupted stocks resume from their partial checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--partial-save-interval",
+        type=int,
+        default=100,
+        metavar="N",
+        help=(
+            "Save intra-stock partial progress every N days so a session expiry mid-stock "
+            "doesn't lose all work (0 disables). Default: 100."
         ),
     )
     parser.add_argument(
@@ -308,12 +362,16 @@ examples:
             print(f"  skip: cache already exists at {output}", flush=True)
             skipped.append(ticker)
             continue
+        partial_file = args.cache_root / f"{ticker}.partial.pt"
+        if partial_file.exists():
+            print(f"  partial checkpoint found — will resume mid-stock", flush=True)
         try:
             embed_ticker(
                 ticker,
                 dataset_root=args.dataset_root,
                 cache_root=args.cache_root,
                 summarizer=summarizer,
+                partial_save_interval=args.partial_save_interval,
             )
             succeeded.append(ticker)
         except Exception:

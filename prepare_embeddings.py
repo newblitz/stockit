@@ -1,34 +1,37 @@
 """Cache frozen hierarchical mT5 embeddings for CMIN news, once per stock/day.
 
 Run without --ticker to process every CMIN-US stock (110 tickers).
-Already-cached tickers are skipped automatically, so the script is safely
-resumable after interruption.
+Only caches bearing the current preprocessing version are skipped automatically,
+so a preprocessing change safely triggers regeneration rather than mixing stale
+text embeddings into a run.
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
 import html
 import json
 import math
 import re
 import traceback
+from bisect import bisect_left
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import torch
 
-from src.data import _read_prices, available_tickers
+from src.data import PREPROCESSING_VERSION, available_tickers, prepared_prices
 from src.summarization import HierarchicalSummarizer
 
 # §4.2 preprocessing constants
 _MIN_ARTICLE_CHARS = 50
-_DEDUP_THRESHOLD = 0.9   # character 4-gram Jaccard threshold (~90% Levenshtein similarity)
-_NGRAM_SIZE = 4
+_DEDUP_THRESHOLD = 0.9
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
+_US_CLOSE = time(16, 0)
+_CN_CLOSE = time(15, 0)
 
 
 def _clean(raw: str) -> str:
@@ -39,30 +42,70 @@ def _clean(raw: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-def _char_ngrams(text: str) -> frozenset[str]:
-    """Precompute character n-gram set for O(1)-per-lookup Jaccard similarity."""
-    return frozenset(text[i : i + _NGRAM_SIZE] for i in range(max(0, len(text) - _NGRAM_SIZE + 1)))
-
-
-def _is_near_duplicate(candidate_ngrams: frozenset[str], cand_len: int, kept_ngrams: list[frozenset[str]], kept_lens: list[int]) -> bool:
-    """Return True if candidate Jaccard-similarity with any kept article exceeds _DEDUP_THRESHOLD.
-
-    Uses precomputed character 4-gram sets and C-level set operations instead of pure-Python
-    SequenceMatcher, giving a 20-50× speedup with equivalent duplicate-detection accuracy for
-    short financial headlines (§4.2: keep earliest; drop later articles with >90% overlap).
-
-    Avoids allocating a union frozenset by computing |A∪B| = |A| + |B| - |A∩B| arithmetically.
-    """
-    if not candidate_ngrams:
+def _has_current_cache(path: Path) -> bool:
+    """Return whether a completed cache was produced by this exact pipeline."""
+    if not path.exists():
         return False
-    for k, k_len in zip(kept_ngrams, kept_lens):
-        if not k:
-            continue
-        intersection_size = len(candidate_ngrams & k)
-        union_size = cand_len + k_len - intersection_size
-        if union_size > 0 and intersection_size / union_size > _DEDUP_THRESHOLD:
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        return payload.get("preprocessing_version") == PREPROCESSING_VERSION
+    except Exception:
+        return False
+
+
+def levenshtein_distance(left: str, right: str) -> int:
+    """Exact character-level Levenshtein distance using O(min(n, m)) memory."""
+    if len(left) < len(right):
+        left, right = right, left
+    previous = list(range(len(right) + 1))
+    for left_index, left_char in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_char in enumerate(right, start=1):
+            current.append(min(
+                current[-1] + 1, previous[right_index] + 1,
+                previous[right_index - 1] + (left_char != right_char),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def _is_near_duplicate(candidate: str, kept: list[str]) -> bool:
+    """Use the §4.2 >90% normalized Levenshtein-overlap rule."""
+    for earlier in kept:
+        scale = max(len(candidate), len(earlier))
+        similarity = 1.0 if scale == 0 else 1 - levenshtein_distance(candidate, earlier) / scale
+        if similarity > _DEDUP_THRESHOLD:
             return True
     return False
+
+
+def _market_session(news_dir: Path) -> tuple[ZoneInfo, time]:
+    """Return the documented market-local cutoff for a CMIN news directory."""
+    if "CMIN-CN" in str(news_dir):
+        return ZoneInfo("Asia/Shanghai"), _CN_CLOSE
+    return ZoneInfo("America/New_York"), _US_CLOSE
+
+
+def _available_trading_day(
+    timestamp: str, trading_days: list[date], market_tz: ZoneInfo, close_time: time
+) -> date | None:
+    """Map UTC source timestamps to the first session where news is available.
+
+    CMIN's timestamps have no explicit offset.  The Yahoo-news CMIN-US source
+    is treated as UTC; it is converted to the exchange timezone, and an item
+    published after the regular-session close is assigned to the next trading
+    day.  This prevents it from entering an earlier same-day decision.
+    """
+    try:
+        published = datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    local = published.astimezone(market_tz)
+    candidate = local.date()
+    if local.timetz().replace(tzinfo=None) > close_time:
+        candidate = date.fromordinal(candidate.toordinal() + 1)
+    index = bisect_left(trading_days, candidate)
+    return trading_days[index] if index < len(trading_days) else None
 
 
 def hourly_documents(news_dir: Path, trading_days: list[date]) -> list[list[str]]:
@@ -71,28 +114,32 @@ def hourly_documents(news_dir: Path, trading_days: list[date]) -> list[list[str]
     Applies the three §4.2 preprocessing steps before text reaches the summarizer:
     1. HTML entity decoding + lowercasing + non-alphanumeric stripping + whitespace collapse.
     2. Articles shorter than _MIN_ARTICLE_CHARS (50) characters after cleaning are dropped.
-    3. Per-day near-duplicate removal (>90% character overlap): earliest timestamp is kept.
+    3. Per-day near-duplicate removal (>90% normalized Levenshtein overlap): earliest is kept.
     """
-    # Collect (timestamp, hour, cleaned_text) per calendar day.
+    # Collect under the first market session where the article is available.
     by_day: dict[date, list[tuple[str, str, str]]] = defaultdict(list)
+    market_tz, close_time = _market_session(news_dir)
     if news_dir.exists():
         for file in news_dir.iterdir():
             if not file.is_file():
                 continue
             try:
-                day = date.fromisoformat(file.name)
+                date.fromisoformat(file.name)
             except ValueError:
                 continue
             for line in file.read_text().splitlines():
                 record = json.loads(line)
                 timestamp = record.get("created_at", "")
-                hour = timestamp[:13] if len(timestamp) >= 13 else f"{day.isoformat()} 00"
+                available_day = _available_trading_day(timestamp, trading_days, market_tz, close_time)
+                if available_day is None:
+                    continue
+                hour = timestamp[:13] if len(timestamp) >= 13 else f"{available_day.isoformat()} 00"
                 raw = record.get("text", "")
                 if isinstance(raw, list):
                     raw = " ".join(raw)
                 text = _clean(raw)
                 if len(text) >= _MIN_ARTICLE_CHARS:
-                    by_day[day].append((timestamp, hour, text))
+                    by_day[available_day].append((timestamp, hour, text))
 
     result: list[list[str]] = []
     for current_day in trading_days:
@@ -100,20 +147,12 @@ def hourly_documents(news_dir: Path, trading_days: list[date]) -> list[list[str]
         articles = sorted(by_day.get(current_day, []), key=lambda x: x[0])
 
         # Deduplicate: keep first occurrence, drop near-duplicates.
-        # n-gram sets are precomputed once per article so _is_near_duplicate
-        # only needs C-level set ops (not repeated SequenceMatcher calls).
         kept_texts: list[str] = []
         kept_hours: list[str] = []
-        kept_ngrams: list[frozenset[str]] = []
-        kept_lens: list[int] = []
         for _ts, hour, text in articles:
-            ng = _char_ngrams(text)
-            ng_len = len(ng)
-            if not _is_near_duplicate(ng, ng_len, kept_ngrams, kept_lens):
+            if not _is_near_duplicate(text, kept_texts):
                 kept_texts.append(text)
                 kept_hours.append(hour)
-                kept_ngrams.append(ng)
-                kept_lens.append(ng_len)
 
         # Group deduplicated articles by hour, preserving chronological order within each hour.
         hourly: dict[str, list[str]] = defaultdict(list)
@@ -144,7 +183,7 @@ def embed_ticker(
     the next run picks up from the last partial checkpoint instead of day 1.
     The partial file is deleted once the final ``.pt`` is saved.
     """
-    days, _ = _read_prices(dataset_root / "price" / "processed" / f"{ticker}.txt")
+    days, _, _ = prepared_prices(dataset_root, ticker)
     documents = hourly_documents(dataset_root / "news" / "preprocessed" / ticker, days)
     total_days = len(days)
 
@@ -156,9 +195,12 @@ def embed_ticker(
     embeddings: list[torch.Tensor] = []
     if partial.exists():
         saved = torch.load(partial, map_location="cpu", weights_only=False)
-        embeddings = list(saved["embeddings"])   # Tensor → list for appending
-        start = len(embeddings)
-        print(f"  {ticker}: resuming from day {start + 1}/{total_days} (partial checkpoint found)", flush=True)
+        if saved.get("preprocessing_version") == PREPROCESSING_VERSION:
+            embeddings = list(saved["embeddings"])   # Tensor → list for appending
+            start = len(embeddings)
+            print(f"  {ticker}: resuming from day {start + 1}/{total_days} (partial checkpoint found)", flush=True)
+        else:
+            print(f"  {ticker}: ignoring partial cache with old preprocessing", flush=True)
 
     for index, day_documents in enumerate(documents[start:], start=start + 1):
         _, embedding = summarizer.summarize_and_embed(day_documents)
@@ -170,14 +212,16 @@ def embed_ticker(
         # ── Save partial checkpoint (intra-stock, for session-expiry resilience) ──
         if partial_save_interval > 0 and index % partial_save_interval == 0 and index < total_days:
             torch.save(
-                {"dates": [d.isoformat() for d in days[:index]], "embeddings": torch.stack(embeddings)},
+                {"dates": [d.isoformat() for d in days[:index]], "embeddings": torch.stack(embeddings),
+                 "preprocessing_version": PREPROCESSING_VERSION},
                 partial,
             )
             print(f"  {ticker}: partial checkpoint saved at day {index}/{total_days}", flush=True)
 
     # ── All days done: write final file and clean up partial ─────────────────
     torch.save(
-        {"dates": [day.isoformat() for day in days], "embeddings": torch.stack(embeddings)},
+        {"dates": [day.isoformat() for day in days], "embeddings": torch.stack(embeddings),
+         "preprocessing_version": PREPROCESSING_VERSION},
         output,
     )
     if partial.exists():
@@ -213,11 +257,10 @@ def _select_tickers(args: argparse.Namespace) -> list[str]:
 
 def _print_status(tickers: list[str], cache_root: Path, shard_total: int | None) -> None:
     """Print done/partial/pending counts and, when relevant, copy-paste shard commands."""
-    done    = [t for t in tickers if (cache_root / f"{t}.pt").exists()]
+    done    = [t for t in tickers if _has_current_cache(cache_root / f"{t}.pt")]
     partial = [t for t in tickers if (cache_root / f"{t}.partial.pt").exists()
                and not (cache_root / f"{t}.pt").exists()]
-    pending = [t for t in tickers if not (cache_root / f"{t}.pt").exists()
-               and not (cache_root / f"{t}.partial.pt").exists()]
+    pending = [t for t in tickers if t not in done and not (cache_root / f"{t}.partial.pt").exists()]
     print(
         f"\nStatus — {len(tickers)} ticker(s) in scope: "
         f"{len(done)} done, {len(partial)} partial (will resume), {len(pending)} not started"
@@ -333,7 +376,7 @@ examples:
         _print_status(tickers, args.cache_root, shard_total=args.shard[1] if args.shard else None)
         return
 
-    pending_tickers = [t for t in tickers if not (args.cache_root / f"{t}.pt").exists()]
+    pending_tickers = [t for t in tickers if not _has_current_cache(args.cache_root / f"{t}.pt")]
     total = len(tickers)
     shard_label = f" (shard {args.shard[0]}/{args.shard[1]})" if args.shard else ""
     print(
@@ -358,10 +401,12 @@ examples:
     for ticker_idx, ticker in enumerate(tickers, start=1):
         output = args.cache_root / f"{ticker}.pt"
         print(f"[{ticker_idx}/{total}] {ticker}", flush=True)
-        if output.exists():
+        if _has_current_cache(output):
             print(f"  skip: cache already exists at {output}", flush=True)
             skipped.append(ticker)
             continue
+        if output.exists():
+            print("  regenerate: cache uses old preprocessing", flush=True)
         partial_file = args.cache_root / f"{ticker}.partial.pt"
         if partial_file.exists():
             print(f"  partial checkpoint found — will resume mid-stock", flush=True)

@@ -152,7 +152,7 @@ class HierarchicalCoAttentionStockPredictor(nn.Module):
         seq_len: int = 30,
         patch_len: int = 10,
         stride: int = 5,
-        price_dim: int = 17,
+        price_dim: int = 6,
         d_model: int = 128,
         d_ff: int = 256,
         n_heads: int = 16,

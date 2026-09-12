@@ -22,11 +22,9 @@ class Config:
     lr: float = 1e-4
     lr_decay: float = 1e-4
     lr_decay_epoch: int = 5
-    epochs: int = 100
+    epochs: int = 20
     batch_size: int = 16
-    # Set patience to 0 to disable early stopping; otherwise stop after this many
-    # epochs without validation-MCC improvement.
-    patience: int = 0
+    patience: int = 5
 
     # LLM
     llm_model: str = "csebuetnlp/mT5_multilingual_XLSum"
@@ -36,8 +34,7 @@ class Config:
     text_embedding_dim: int = 768
 
     # Price features
-    # The official CMIN processed files contain movement, OHLC returns, and
-    # volume: six numerical columns after the date.
+    # Original CMIN processed price inputs: movement, OHLC returns, and volume.
     price_dim: int = 6
 
     # Co-attention fusion layers

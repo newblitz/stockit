@@ -37,7 +37,10 @@ def metrics(logits: Tensor, labels: Tensor) -> dict[str, float]:
     fn = ((prediction == 0) & (truth == 1)).sum().item()
     denominator = float((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
     mcc = 0.0 if denominator == 0 else (tp * tn - fp * fn) / denominator**0.5
-    return {"accuracy": (tp + tn) / max(tp + tn + fp + fn, 1), "mcc": mcc}
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+    return {"accuracy": (tp + tn) / max(tp + tn + fp + fn, 1), "mcc": mcc, "f1": f1}
 
 
 @torch.no_grad()
@@ -45,14 +48,15 @@ def evaluate(
     model: nn.Module, loader: DataLoader, device: torch.device, criterion: nn.Module
 ) -> dict[str, float]:
     model.eval()
-    outputs, labels, losses = [], [], []
-    for prices, text, label in loader:
+    outputs, labels, losses, n_examples = [], [], [], 0
+    for prices, text, label, _next_return in loader:
         logits = model(prices.to(device), text.to(device))
-        losses.append(criterion(logits, label.to(device)).item())
+        losses.append(criterion(logits, label.to(device)).item() * len(label))
+        n_examples += len(label)
         outputs.append(logits.cpu())
         labels.append(label)
     result = metrics(torch.cat(outputs), torch.cat(labels))
-    result["loss"] = float(np.mean(losses))
+    result["loss"] = float(sum(losses) / max(n_examples, 1))
     return result
 
 
@@ -71,6 +75,37 @@ def checkpoint(
          "config": asdict(config), "validation": result, "history": history},
         path,
     )
+
+
+def validate_checkpoint_compatibility(
+    saved: dict, *, price_dim: int, text_embedding_dim: int, config: Config
+) -> None:
+    """Fail before loading a checkpoint trained with different input geometry."""
+    saved_config = saved.get("config", {})
+    expected = {
+        "price_dim": price_dim,
+        "text_embedding_dim": text_embedding_dim,
+        "seq_len": config.seq_len,
+        "patch_len": config.patch_len,
+        "stride": config.stride,
+        "d_model": config.d_model,
+        "d_ff": config.d_ff,
+        "n_heads": config.n_heads,
+        "n_layers": config.n_layers,
+        "n_fusion_layers": config.n_fusion_layers,
+        "n_classes": config.n_classes,
+    }
+    mismatch = {
+        name: (saved_config.get(name), value)
+        for name, value in expected.items()
+        if saved_config.get(name) != value
+    }
+    if mismatch:
+        details = ", ".join(f"{name}: checkpoint={old}, active={new}" for name, (old, new) in mismatch.items())
+        raise ValueError(
+            "Checkpoint is incompatible with the active paper pipeline (" + details + "). "
+            "Start a new checkpoint directory instead of loading a checkpoint with mismatched geometry."
+        )
 
 
 class Tee:
@@ -136,6 +171,10 @@ def main() -> None:
         sys.stdout = Tee(sys.stdout, args.log_file)  # type: ignore[assignment]
 
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     config = Config()
     config.epochs = args.epochs
@@ -143,6 +182,7 @@ def main() -> None:
 
     train_set = CMINWindowDataset(args.dataset_root, args.cache_root, "train", seq_len=config.seq_len, max_stocks=args.max_stocks)
     val_set   = CMINWindowDataset(args.dataset_root, args.cache_root, "val",   seq_len=config.seq_len, max_stocks=args.max_stocks)
+    test_set  = CMINWindowDataset(args.dataset_root, args.cache_root, "test",  seq_len=config.seq_len, max_stocks=args.max_stocks)
 
     model = HierarchicalCoAttentionStockPredictor(
         text_embedding_dim=train_set.text_embedding_dim, seq_len=config.seq_len, patch_len=config.patch_len,
@@ -155,7 +195,12 @@ def main() -> None:
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     val_loader   = DataLoader(val_set,   batch_size=args.batch_size)
+    test_loader  = DataLoader(test_set,  batch_size=args.batch_size)
     optimizer    = Adam(model.parameters(), lr=config.lr)
+    # Table 2: decay rate 1e-4 every five epochs.
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=config.lr_decay_epoch, gamma=1 - config.lr_decay
+    )
     criterion    = nn.BCEWithLogitsLoss()
 
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -188,6 +233,12 @@ def main() -> None:
         else:
             print(f"[resume] Loading checkpoint from {last_ckpt} ...", flush=True)
             saved = torch.load(last_ckpt, map_location=device, weights_only=False)
+            validate_checkpoint_compatibility(
+                saved,
+                price_dim=train_set.price_dim,
+                text_embedding_dim=train_set.text_embedding_dim,
+                config=config,
+            )
             model.load_state_dict(saved["model_state_dict"])
             optimizer.load_state_dict(saved["optimizer_state_dict"])
             history      = saved.get("history", [])
@@ -226,7 +277,7 @@ def main() -> None:
         epoch_started = time.perf_counter()
         model.train()
         losses, outputs, labels_all = [], [], []
-        for prices, text, labels in train_loader:
+        for prices, text, labels, _next_return in train_loader:
             optimizer.zero_grad(set_to_none=True)
             logits = model(prices.to(device), text.to(device))
             loss = criterion(logits, labels.to(device))
@@ -244,9 +295,11 @@ def main() -> None:
             "train_loss": float(np.mean(losses)),
             "train_accuracy": train_metrics["accuracy"],
             "train_mcc": train_metrics["mcc"],
+            "train_f1": train_metrics["f1"],
             "val_loss": validation["loss"],
             "val_accuracy": validation["accuracy"],
             "val_mcc": validation["mcc"],
+            "val_f1": validation["f1"],
         }
         history.append(result)
         
@@ -257,6 +310,8 @@ def main() -> None:
             tb_writer.add_scalar("Accuracy/val",      result["val_accuracy"],   epoch)
             tb_writer.add_scalar("MCC/train",         result["train_mcc"],      epoch)
             tb_writer.add_scalar("MCC/val",           result["val_mcc"],        epoch)
+            tb_writer.add_scalar("F1/train",          result["train_f1"],       epoch)
+            tb_writer.add_scalar("F1/val",            result["val_f1"],         epoch)
             tb_writer.add_scalar("Learning_Rate",     result["learning_rate"],  epoch)
             tb_writer.add_scalar("Epoch_Time_s",      result["elapsed_seconds"],epoch)
             tb_writer.flush()
@@ -299,16 +354,31 @@ def main() -> None:
             tags.append(f"saved periodic/epoch_{epoch:03d}.pt")
         print(
             f"Epoch {epoch:03d}/{args.epochs} | {result['elapsed_seconds']:.1f}s | "
-            f"train loss {result['train_loss']:.4f}, acc {result['train_accuracy']:.4f}, MCC {result['train_mcc']:.4f} | "
-            f"val loss {result['val_loss']:.4f}, acc {result['val_accuracy']:.4f}, MCC {result['val_mcc']:.4f} | "
+            f"train loss {result['train_loss']:.4f}, acc {result['train_accuracy']:.4f}, MCC {result['train_mcc']:.4f}, F1 {result['train_f1']:.4f} | "
+            f"val loss {result['val_loss']:.4f}, acc {result['val_accuracy']:.4f}, MCC {result['val_mcc']:.4f}, F1 {result['val_f1']:.4f} | "
             f"lr {result['learning_rate']:.2e}" + (" | " + ", ".join(tags) if tags else ""),
             flush=True,
         )
+        scheduler.step()
         if config.patience > 0 and stale_epochs >= config.patience:
             print(f"Early stopping after {config.patience} epochs without validation-MCC improvement.", flush=True)
             break
 
-    (args.checkpoint_dir / "metrics.json").write_text(json.dumps(history[-1], indent=2) + "\n")
+    # The test split is touched exactly once, after validation-based model selection.
+    best_path = args.checkpoint_dir / "best.pt"
+    if best_path.exists():
+        selected = torch.load(best_path, map_location=device, weights_only=False)
+        model.load_state_dict(selected["model_state_dict"])
+    test_result = evaluate(model, test_loader, device, criterion)
+    final_result = {**history[-1], "test_loss": test_result["loss"],
+                    "test_accuracy": test_result["accuracy"], "test_mcc": test_result["mcc"],
+                    "test_f1": test_result["f1"]}
+    print(
+        f"Held-out test | loss {test_result['loss']:.4f}, "
+        f"acc {test_result['accuracy']:.4f}, MCC {test_result['mcc']:.4f}, F1 {test_result['f1']:.4f}",
+        flush=True,
+    )
+    (args.checkpoint_dir / "metrics.json").write_text(json.dumps(final_result, indent=2) + "\n")
     if tb_writer:
         tb_writer.close()
 

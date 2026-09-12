@@ -303,7 +303,7 @@ The root training script creates the supplied checkpoint directory (default:
 | `best_accuracy.pt` | Model selected by highest validation accuracy. |
 | `history.json` | Full list of epoch metric dictionaries, rewritten after every epoch. |
 | `history.csv` | Spreadsheet-friendly version of the same full history. |
-| `metrics.json` | Final epoch summary. |
+| `metrics.json` | Validation-selected checkpoint's one-time held-out test summary. |
 
 Every `.pt` checkpoint contains `model_state_dict`, `optimizer_state_dict`,
 the serialized `Config`, the epoch summary, and metric history. Restore the
@@ -339,10 +339,15 @@ used a non-default architecture, recreate it with all matching arguments
 - mT5 embedding generation on CPU is expensive. A GPU is strongly recommended
   for full CMIN-US/CMIN-CN preprocessing. Caches are deliberately separate
   from source data and can be reused between neural-model experiments.
-- The root `train.py` currently builds train and validation datasets. It does
-  not yet load/evaluate the test split after selecting `best.pt`; add that only
-  after the training/checkpoint workflow is stable, so the held-out test set is
-  not accidentally used for model selection.
+- `train.py` builds non-overlapping train/validation/test windows, selects
+  `best.pt` using validation MCC, then evaluates the test split exactly once.
+- News availability is based on source timestamps treated as UTC and converted
+  to the exchange timezone.  Articles after the regular close are moved to the
+  next trading session, so they cannot enter an earlier same-day decision.
+- Run `python evaluate_checkpoint.py --checkpoint checkpoints/cmin-us/best.pt`
+  for held-out ACC/MCC, the specified long/cash simulation, and latency. Run
+  `python run_ten_seeds.py` for the ten-seed aggregate; `--compare-summary`
+  additionally performs paired t-tests against a baseline or ablation run.
 - CMIN-US is the active default. CMIN-CN requires downloading its separate
   directory and building a separate text cache/checkpoint path.
 
@@ -351,8 +356,8 @@ used a non-default architecture, recreate it with all matching arguments
 Before making changes, a future agent should:
 
 1. Read this README and `paper/paper.md`.
-2. Use root-level `prepare_embeddings.py` and `train.py`, not the legacy
-   `main.py` path.
+2. Use root-level `prepare_embeddings.py` and `train.py` (`main.py` delegates
+   to the same trainer for compatibility).
 3. Check for active embedding/training processes before starting new ones.
 4. Preserve `data/CMIN-Dataset-official` and cached `.pt` files; they are
    large, expensive to regenerate, and may have been created by a prior agent.

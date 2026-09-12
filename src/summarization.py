@@ -23,11 +23,15 @@ class HierarchicalSummarizer:
         device: str | torch.device | None = None,
     ) -> None:
         try:
-            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            from transformers import AutoConfig, AutoModelForSeq2SeqLM, AutoTokenizer
         except ImportError as exc:  # pragma: no cover - depends on optional package
             raise ImportError("Install `transformers` to use HierarchicalSummarizer.") from exc
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        # tie_word_embeddings=False silences the "will NOT tie them" warning that fires
+        # when the checkpoint already stores separate weights for shared / lm_head.
+        config = AutoConfig.from_pretrained(model_name)
+        config.tie_word_embeddings = False
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name, config=config)
         self.model.eval().requires_grad_(False)
         self.max_length = max_length
         self.summary_max_new_tokens = summary_max_new_tokens
@@ -40,7 +44,11 @@ class HierarchicalSummarizer:
         tokens = self.tokenizer(
             inputs, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length
         ).to(self.device)
-        generated = self.model.generate(**tokens, max_new_tokens=self.summary_max_new_tokens)
+        generated = self.model.generate(
+            **tokens,
+            max_new_tokens=self.summary_max_new_tokens,
+            max_length=None,   # suppress the "max_new_tokens and max_length both set" warning
+        )
         return self.tokenizer.batch_decode(generated, skip_special_tokens=True)
 
     @torch.inference_mode()

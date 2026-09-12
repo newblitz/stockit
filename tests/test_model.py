@@ -10,14 +10,14 @@ def test_paper_model_shapes_and_backward() -> None:
         seq_len=30,
         patch_len=10,
         stride=5,
-        price_dim=17,
+        price_dim=6,
         d_model=32,
         d_ff=64,
         n_heads=4,
         n_layers=1,
         n_fusion_layers=2,
     )
-    prices = torch.randn(2, 30, 17)
+    prices = torch.randn(2, 30, 6)
     text = torch.randn(2, 30, 64)
     logits = model(prices, text)
     assert logits.shape == (2, 1)

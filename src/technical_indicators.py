@@ -8,7 +8,7 @@ def compute_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
     loss = np.where(delta < 0, -delta, 0.0)
     avg_gain = _ema(gain, period)
     avg_loss = _ema(loss, period)
-    rs = np.where(avg_loss != 0, avg_gain / avg_loss, 100.0)
+    rs = np.divide(avg_gain, avg_loss, out=np.full_like(avg_gain, 100.0), where=avg_loss != 0)
     rsi = 100.0 - 100.0 / (1.0 + rs)
     return rsi / 100.0  # normalize to [0, 1]
 
@@ -54,31 +54,30 @@ def compute_ma(prices: np.ndarray, period: int) -> np.ndarray:
 
 
 def compute_price_features(raw: np.ndarray) -> np.ndarray:
-    """Compute 17-dimensional feature vector from CMIN raw data.
+    """Return the paper's six CMIN price fields plus eleven TA features.
 
-    raw: (T, 6) -> columns [date, feat1, feat2, feat3, feat4, feat5, volume]
-    The 5 feature columns are log-return-like normalized values.
-    We reconstruct approximate prices by cumulative sum (treating as log returns),
-    then compute technical indicators.
-
-    Returns: (T, 17)
+    ``raw`` is the six numeric columns in a processed CMIN row: daily movement,
+    four OHLC log returns, and volume.  The close-return column is column four;
+    its cumulative exponential gives a stable relative close series for indicators.
     """
-    feats = raw[:, 1:6]  # (T, 5) - OHLCV log returns
-    volume = raw[:, 6] if raw.shape[1] > 6 else np.ones(raw.shape[0])
+    if raw.ndim != 2 or raw.shape[1] != 6:
+        raise ValueError("expected CMIN price data shaped [days, 6]")
+    returns = raw[:, :5]
+    volume = raw[:, 5]
 
     # Reconstruct approximate prices from close returns (column 4, index 4)
-    close_returns = feats[:, 4]
+    close_returns = returns[:, 4]
     close_prices = np.exp(np.cumsum(close_returns))
     close_prices[0] = 1.0
 
     # Use close as proxy for OHL (since we don't have raw OHLCV)
-    high_prices = close_prices * (1 + np.abs(feats[:, 1]))
-    low_prices = close_prices * (1 - np.abs(feats[:, 2]))
+    high_prices = close_prices * np.exp(np.maximum(returns[:, 1], 0.0))
+    low_prices = close_prices * np.exp(np.minimum(returns[:, 2], 0.0))
 
     # Compute indicators
     rsi = compute_rsi(close_prices)
     macd_l, macd_s, macd_h = compute_macd(close_prices)
-    bb_u, bb_m, bb_l = compute_bollinger(close_prices)
+    bb_u, _bb_m, bb_l = compute_bollinger(close_prices)
     atr = compute_atr(high_prices, low_prices, close_prices)
     obv = compute_obv(close_prices, volume)
     ma5 = compute_ma(close_prices, 5)
@@ -87,18 +86,18 @@ def compute_price_features(raw: np.ndarray) -> np.ndarray:
 
     # Stack all 17 features
     features = np.stack([
-        feats[:, 0],  # 1. feat1 (open-like)
-        feats[:, 1],  # 2. feat2 (high-like)
-        feats[:, 2],  # 3. feat3 (low-like)
-        feats[:, 3],  # 4. feat4
-        feats[:, 4],  # 5. feat5 (close return)
-        rsi,          # 6. RSI
-        macd_l,       # 7. MACD line
-        macd_s,       # 8. MACD signal
-        macd_h,       # 9. MACD histogram
-        bb_u,         # 10. BB upper
-        bb_m,         # 11. BB middle
-        bb_l,         # 12. BB lower
+        raw[:, 0],    # 1. movement / close-to-close return
+        raw[:, 1],    # 2--5. OHLC returns
+        raw[:, 2],
+        raw[:, 3],
+        raw[:, 4],
+        raw[:, 5],    # 6. volume
+        rsi,          # 7. RSI
+        macd_l,       # 8. MACD line
+        macd_s,       # 9. MACD signal
+        macd_h,       # 10. MACD histogram
+        bb_u,         # 11. BB upper
+        bb_l,         # 12. BB lower (middle duplicates MA20 below)
         atr,          # 13. ATR
         obv,          # 14. OBV
         ma5,          # 15. MA5

@@ -16,7 +16,7 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-
+from collections import Counter
 import numpy as np
 import torch
 from torch import Tensor, nn
@@ -183,7 +183,7 @@ def main() -> None:
     train_set = CMINWindowDataset(args.dataset_root, args.cache_root, "train", seq_len=config.seq_len, max_stocks=args.max_stocks)
     val_set   = CMINWindowDataset(args.dataset_root, args.cache_root, "val",   seq_len=config.seq_len, max_stocks=args.max_stocks)
     test_set  = CMINWindowDataset(args.dataset_root, args.cache_root, "test",  seq_len=config.seq_len, max_stocks=args.max_stocks)
-
+   
     model = HierarchicalCoAttentionStockPredictor(
         text_embedding_dim=train_set.text_embedding_dim, seq_len=config.seq_len, patch_len=config.patch_len,
         stride=config.stride, price_dim=train_set.price_dim, d_model=config.d_model, d_ff=config.d_ff,
@@ -192,6 +192,9 @@ def main() -> None:
     )
     device = torch.device(args.device)
     model.to(device)
+
+
+
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     val_loader   = DataLoader(val_set,   batch_size=args.batch_size)

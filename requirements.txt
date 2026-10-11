@@ -5,3 +5,11 @@ numpy>=1.24
 pytest>=8.0
 tensorboard>=2.15
 scipy>=1.11
+
+# Optional: alternative frozen text backends (see replace.md, config.py's
+# `summarizer`/`embedder` switches, and scripts/build_text_cache.py).
+# Not required for the default mT5 pipeline (prepare_embeddings.py / train.py).
+vllm; sys_platform == "linux"      # Qwen3 batched generation (Linux + CUDA only)
+accelerate>=0.30                   # transformers fallback for QwenSummarizer
+FlagEmbedding>=1.2                 # BGE-M3 dense embeddings
+sentence-transformers>=2.7         # fallback if FlagEmbedding is unavailable

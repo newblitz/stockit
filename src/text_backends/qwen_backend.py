@@ -1,0 +1,153 @@
+"""Frozen Qwen3 instruct-mode hierarchical summarizer (replace.md Step 2).
+
+Prefers vLLM for batched generation; falls back to batched Hugging Face
+``transformers`` generation when vLLM is not installed or fails to initialize
+(e.g. no compatible GPU). Both paths run in "non-thinking" mode and strip any
+``<think>...</think>`` block defensively.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Sequence
+
+from prompts import DAILY_PROMPT_QWEN, HOURLY_PROMPT_QWEN
+
+from .base import Summarizer
+
+DEFAULT_QWEN_MODEL = "Qwen/Qwen3-8B"
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think(text: str) -> str:
+    """Remove a leftover <think>...</think> block even in non-thinking mode."""
+    return _THINK_RE.sub("", text).strip()
+
+
+class QwenSummarizer(Summarizer):
+    def __init__(
+        self,
+        model_name: str = DEFAULT_QWEN_MODEL,
+        *,
+        dtype: str = "bfloat16",
+        max_model_len: int = 8192,
+        hourly_max_tokens: int = 256,
+        daily_max_tokens: int = 384,
+        device: str | None = None,
+        use_vllm: bool = True,
+        gpu_memory_utilization: float = 0.9,
+    ) -> None:
+        self.model_name = model_name
+        self.dtype = dtype
+        self.max_model_len = max_model_len
+        self.hourly_max_tokens = hourly_max_tokens
+        self.daily_max_tokens = daily_max_tokens
+        self._backend: str | None = None
+        self._tokenizer = None
+        self._engine = None
+        self._sampling_params_cls = None
+        self._hf_model = None
+        self._hf_device = None
+
+        if use_vllm:
+            try:
+                self._init_vllm(gpu_memory_utilization)
+            except Exception as exc:  # pragma: no cover - depends on optional package/GPU
+                print(
+                    f"[QwenSummarizer] vLLM unavailable ({exc!r}); "
+                    "falling back to transformers batched generation.",
+                    flush=True,
+                )
+        if self._backend is None:
+            self._init_transformers(device)
+
+    def _init_vllm(self, gpu_memory_utilization: float) -> None:
+        from transformers import AutoTokenizer
+        from vllm import LLM, SamplingParams
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self._engine = LLM(
+            model=self.model_name,
+            dtype=self.dtype,
+            max_model_len=self.max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
+            trust_remote_code=True,
+        )
+        self._sampling_params_cls = SamplingParams
+        self._backend = "vllm"
+
+    def _init_transformers(self, device: str | None) -> None:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        torch_dtype = getattr(torch, self.dtype, torch.bfloat16)
+        self._hf_model = AutoModelForCausalLM.from_pretrained(
+            self.model_name, torch_dtype=torch_dtype, trust_remote_code=True
+        )
+        self._hf_model.eval().requires_grad_(False)
+        self._hf_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self._hf_model.to(self._hf_device)
+        self._backend = "hf"
+
+    def _to_chat_prompt(self, prompt: str) -> str:
+        messages = [{"role": "user", "content": prompt}]
+        return self._tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+
+    def _generate(self, prompts: list[str], max_tokens: int) -> list[str]:
+        if not prompts:
+            return []
+        chat_prompts = [self._to_chat_prompt(prompt) for prompt in prompts]
+        if self._backend == "vllm":
+            sampling = self._sampling_params_cls(temperature=0.0, max_tokens=max_tokens)
+            outputs = self._engine.generate(chat_prompts, sampling)
+            raw_texts = [output.outputs[0].text for output in outputs]
+        else:
+            import torch
+
+            raw_texts = []
+            budget = max(self.max_model_len - max_tokens, 1)
+            for chat_prompt in chat_prompts:
+                tokens = self._tokenizer(
+                    chat_prompt, return_tensors="pt", truncation=True, max_length=budget
+                ).to(self._hf_device)
+                with torch.inference_mode():
+                    generated = self._hf_model.generate(
+                        **tokens,
+                        max_new_tokens=max_tokens,
+                        do_sample=False,
+                        temperature=None,
+                        top_p=None,
+                        top_k=None,
+                    )
+                new_tokens = generated[0, tokens["input_ids"].shape[1] :]
+                raw_texts.append(self._tokenizer.decode(new_tokens, skip_special_tokens=True))
+        return [_strip_think(text) for text in raw_texts]
+
+    def summarize_hourly(self, texts: Sequence[str], *, ticker: str | None = None) -> list[str]:
+        texts = list(texts)
+        if not texts:
+            return []
+        company = ticker or "the company"
+        prompts = [
+            HOURLY_PROMPT_QWEN.format(ticker_or_company=company, documents=text) for text in texts
+        ]
+        return self._generate(prompts, self.hourly_max_tokens)
+
+    def summarize_daily(
+        self, hourly_summaries_per_day: Sequence[Sequence[str]], *, ticker: str | None = None
+    ) -> list[str]:
+        days = list(hourly_summaries_per_day)
+        if not days:
+            return []
+        company = ticker or "the company"
+        prompts = []
+        for day in days:
+            concat_hourly = "\n".join(day) if day else ""
+            prompts.append(DAILY_PROMPT_QWEN.format(ticker_or_company=company, concat_hourly=concat_hourly))
+        return self._generate(prompts, self.daily_max_tokens)

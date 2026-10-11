@@ -1,0 +1,29 @@
+======================================================================
+STARTING TEXT-ONLY TRAINING
+======================================================================
+
+Epoch 001/20 | 49.1s | train loss 0.7024, acc 0.5052, MCC -0.0094, F1 0.5856 | val loss 0.6989, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 002/20 | 48.4s | train loss 0.6958, acc 0.5150, MCC 0.0024, F1 0.6172 | val loss 0.6924, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+Epoch 003/20 | 48.5s | train loss 0.6941, acc 0.5181, MCC 0.0067, F1 0.6260 | val loss 0.6924, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+Epoch 004/20 | 48.0s | train loss 0.6941, acc 0.5178, MCC 0.0019, F1 0.6344 | val loss 0.6931, acc 0.5135, MCC 0.0020, F1 0.6400 | lr 1.00e-04 | saved best.pt (MCC)
+Epoch 005/20 | 47.9s | train loss 0.6939, acc 0.5170, MCC -0.0019, F1 0.6373 | val loss 0.6925, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04 | saved periodic/epoch_005.pt
+Epoch 006/20 | 48.3s | train loss 0.6938, acc 0.5198, MCC 0.0054, F1 0.6391 | val loss 0.6983, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+Epoch 007/20 | 48.2s | train loss 0.6936, acc 0.5171, MCC -0.0037, F1 0.6407 | val loss 0.6924, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+Epoch 008/20 | 48.3s | train loss 0.6931, acc 0.5208, MCC 0.0037, F1 0.6475 | val loss 0.6958, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+Epoch 009/20 | 48.2s | train loss 0.6936, acc 0.5167, MCC -0.0076, F1 0.6452 | val loss 0.6924, acc 0.5193, MCC 0.0000, F1 0.6836 | lr 1.00e-04
+
+Early stopping after 5 epochs without validation-MCC improvement.
+
+======================================================================
+FINAL TEXT-ONLY TEST
+======================================================================
+Loaded best checkpoint: /kaggle/working/stockit/checkpoints/cmin-us/text_only/best.pt
+
+Held-out test | loss 0.6931, acc 0.5233, MCC 0.0097, F1 0.6499
+
+Paper Text-only reference:
+CMIN-US ACC = 56.65 +/- 0.30%
+CMIN-US MCC = 0.125 +/- 0.008
+
+======================================================================
+TEXT-ONLY TRAINING COMPLETE

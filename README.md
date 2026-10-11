@@ -351,6 +351,36 @@ used a non-default architecture, recreate it with all matching arguments
 - CMIN-US is the active default. CMIN-CN requires downloading its separate
   directory and building a separate text cache/checkpoint path.
 
+## Alternative frozen text backends (Qwen3 + BGE-M3)
+
+`prepare_embeddings.py` itself is unchanged and always uses mT5, so the
+already-built `data/cache/cmin-us-mt5/` caches and any checkpoint trained
+from them remain fully reproducible. Separately, `config.py`'s `summarizer`/
+`embedder` switches and the new `scripts/build_text_cache.py` cache builder
+default to **Qwen3-8B** (summarizer) and **BGE-M3** (embedder) instead of
+mT5, built behind the same cache-file contract so nothing downstream
+(`src/model.py`, `src/data.py`, `train.py`) needed to change:
+
+- `config.py`'s `Config.summarizer`/`Config.embedder` default to
+  `"qwen3_8b"`/`"bge_m3"`. Pass `--summarizer mt5_xlsum --embedder
+  mt5_encoder` to `scripts/build_text_cache.py` for the original mT5
+  baseline instead (replace.md's config A).
+- `src/text_backends/` implements `Summarizer`/`Embedder` interfaces with
+  `MT5Summarizer`/`MT5Embedder` (wrapping the existing frozen code) and
+  `QwenSummarizer` (vLLM, HF-`transformers` fallback) / `BGEM3Embedder`
+  (`FlagEmbedding`, `sentence-transformers` fallback) implementations.
+- `scripts/build_text_cache.py` builds a resumable, namespaced
+  (`data/cache/<summarizer>_<embedder>/`, i.e. `data/cache/qwen3_8b_bge_m3/`
+  by default) text + embedding cache with the same
+  `{dates, embeddings, preprocessing_version}` `.pt` format `src/data.py`
+  already reads, so `train.py --cache-root data/cache/<summarizer>_<embedder>`
+  works unmodified against any backend combination (`text_embedding_dim` is
+  inferred from the cache: 1024 for BGE-M3, 768 for mT5).
+
+See [`CHANGES_TEXT_BACKENDS.md`](CHANGES_TEXT_BACKENDS.md) for the full file
+list, every config/dependency change, and the exact commands to build each
+cache and train/evaluate it.
+
 ## Current handoff checklist
 
 Before making changes, a future agent should:

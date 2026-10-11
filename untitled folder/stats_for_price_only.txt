@@ -1,0 +1,56 @@
+======================================================================
+PRICE-ONLY CMIN-US EXPERIMENT
+======================================================================
+Dataset  : /kaggle/working/data/CMIN-Dataset-official/CMIN-US
+Checkpts : /kaggle/working/stockit/checkpoints/cmin-us/price_only
+Device   : cuda
+
+CMINWindowDataset [train]: loaded 110 tickers, skipped 0, total train samples: 65,670
+CMINWindowDataset [val]: loaded 110 tickers, skipped 0, total val samples: 10,780
+CMINWindowDataset [test]: loaded 110 tickers, skipped 0, total test samples: 23,870
+
+Price features : 6
+Train samples  : 65,670
+Val samples    : 10,780
+Test samples   : 23,870
+
+Trainable parameters: 536,705
+Sequence length     : 30
+Patch length        : 10
+Patch stride        : 5
+d_model             : 128
+d_ff                : 256
+Attention heads     : 16
+Transformer layers  : 4
+Dropout             : 0.2
+Learning rate       : 0.0001
+Batch size          : 16
+Epochs              : 20
+Patience            : 5
+
+======================================================================
+STARTING TRAINING
+======================================================================
+
+Epoch 001/20 | 43.0s | train loss 0.6937, acc 0.5390, MCC 0.0663, F1 0.5978 | val loss 0.6951, acc 0.5298, MCC 0.0572, F1 0.5530 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 002/20 | 42.6s | train loss 0.6728, acc 0.5641, MCC 0.1172, F1 0.6232 | val loss 0.7024, acc 0.5239, MCC 0.0350, F1 0.6123 | lr 1.00e-04
+Epoch 003/20 | 42.4s | train loss 0.6580, acc 0.5826, MCC 0.1557, F1 0.6379 | val loss 0.7204, acc 0.5061, MCC -0.0019, F1 0.5887 | lr 1.00e-04
+Epoch 004/20 | 42.1s | train loss 0.6482, acc 0.5975, MCC 0.1869, F1 0.6479 | val loss 0.7211, acc 0.5051, MCC 0.0115, F1 0.5063 | lr 1.00e-04
+Epoch 005/20 | 42.5s | train loss 0.6392, acc 0.6058, MCC 0.2042, F1 0.6514 | val loss 0.7470, acc 0.5068, MCC 0.0054, F1 0.5619 | lr 1.00e-04 | saved periodic/epoch_005.pt
+Epoch 006/20 | 42.4s | train loss 0.6301, acc 0.6165, MCC 0.2264, F1 0.6586 | val loss 0.7445, acc 0.5113, MCC 0.0124, F1 0.5782 | lr 1.00e-04
+
+Early stopping after 5 epochs without validation-MCC improvement.
+
+======================================================================
+FINAL HELD-OUT TEST
+======================================================================
+Loaded best checkpoint: /kaggle/working/stockit/checkpoints/cmin-us/price_only/best.pt
+
+Held-out test | loss 0.6999, acc 0.5039, MCC 0.0044, F1 0.5316
+
+Paper Price-only reference:
+CMIN-US ACC = 59.99 +/- 0.22%
+CMIN-US MCC = 0.169 +/- 0.005
+
+======================================================================
+PRICE-ONLY TRAINING COMPLETE

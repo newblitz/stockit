@@ -1,0 +1,21 @@
+CMINWindowDataset17Feat [train]: loaded 110 tickers, skipped 0, total train samples: 65,670
+CMINWindowDataset17Feat [val]: loaded 110 tickers, skipped 0, total val samples: 10,780
+CMINWindowDataset17Feat [test]: loaded 110 tickers, skipped 0, total test samples: 23,870
+Training on cuda: train=65,670, validation=10,780, price_dim=17, text_dim=768
+Epoch 001/20 | 211.6s | train loss 0.6987, acc 0.5336, MCC 0.0561, F1 0.5889 | val loss 0.7681, acc 0.4884, MCC 0.0175, F1 0.1438 | lr 1.00e-04 | saved best.pt (MCC), saved best_accuracy.pt
+Epoch 002/20 | 210.6s | train loss 0.6765, acc 0.5575, MCC 0.1034, F1 0.6183 | val loss 0.7393, acc 0.5130, MCC -0.0008, F1 0.6427 | lr 1.00e-04 | saved best_accuracy.pt
+Epoch 003/20 | 210.6s | train loss 0.6622, acc 0.5811, MCC 0.1528, F1 0.6357 | val loss 0.7543, acc 0.4991, MCC 0.0231, F1 0.3275 | lr 1.00e-04 | saved best.pt (MCC)
+Epoch 004/20 | 209.9s | train loss 0.6508, acc 0.5948, MCC 0.1815, F1 0.6444 | val loss 0.7405, acc 0.5047, MCC -0.0223, F1 0.6347 | lr 1.00e-04
+Epoch 005/20 | 209.3s | train loss 0.6426, acc 0.6043, MCC 0.2011, F1 0.6507 | val loss 0.7806, acc 0.4822, MCC -0.0241, F1 0.3919 | lr 1.00e-04 | saved periodic/epoch_005.pt
+Epoch 006/20 | 209.0s | train loss 0.6323, acc 0.6152, MCC 0.2237, F1 0.6585 | val loss 0.7531, acc 0.5072, MCC -0.0037, F1 0.6055 | lr 1.00e-04
+Epoch 007/20 | 208.9s | train loss 0.6254, acc 0.6244, MCC 0.2426, F1 0.6654 | val loss 0.7698, acc 0.5039, MCC 0.0057, F1 0.5261 | lr 1.00e-04
+Epoch 008/20 | 209.7s | train loss 0.6164, acc 0.6344, MCC 0.2631, F1 0.6721 | val loss 0.7418, acc 0.5158, MCC 0.0207, F1 0.5871 | lr 1.00e-04 | saved best_accuracy.pt
+Epoch 009/20 | 212.7s | train loss 0.6088, acc 0.6431, MCC 0.2808, F1 0.6792 | val loss 0.7946, acc 0.4993, MCC -0.0080, F1 0.5456 | lr 1.00e-04
+Epoch 010/20 | 209.5s | train loss 0.6017, acc 0.6485, MCC 0.2920, F1 0.6826 | val loss 0.7778, acc 0.5046, MCC -0.0016, F1 0.5728 | lr 1.00e-04 | saved periodic/epoch_010.pt
+Epoch 011/20 | 208.8s | train loss 0.5962, acc 0.6584, MCC 0.3121, F1 0.6905 | val loss 0.8037, acc 0.5019, MCC 0.0058, F1 0.4991 | lr 1.00e-04
+Epoch 012/20 | 209.3s | train loss 0.5887, acc 0.6640, MCC 0.3234, F1 0.6949 | val loss 0.7764, acc 0.5027, MCC 0.0016, F1 0.5345 | lr 1.00e-04
+Epoch 013/20 | 211.6s | train loss 0.5826, acc 0.6710, MCC 0.3376, F1 0.7010 | val loss 0.8181, acc 0.5021, MCC 0.0034, F1 0.5169 | lr 1.00e-04
+Epoch 014/20 | 213.1s | train loss 0.5755, acc 0.6780, MCC 0.3519, F1 0.7060 | val loss 0.8093, acc 0.5014, MCC 0.0021, F1 0.5151 | lr 1.00e-04
+Epoch 015/20 | 215.3s | train loss 0.5673, acc 0.6842, MCC 0.3646, F1 0.7115 | val loss 0.8582, acc 0.4937, MCC -0.0079, F1 0.4714 | lr 1.00e-04 | saved periodic/epoch_015.pt
+Epoch 016/20 | 215.4s | train loss 0.5635, acc 0.6885, MCC 0.3733, F1 0.7141 | val loss 0.8286, acc 0.4973, MCC -0.0078, F1 0.5216 | lr 1.00e-04
+Epoch 017/20 | 215.3s | train loss 0.5569, acc 0.6938, MCC 0.3840, F1 0.7189 | val loss 0.8459, acc 0.4956, MCC -0.0142, F1 0.5365 | lr 1.00e-04

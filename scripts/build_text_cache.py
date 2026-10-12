@@ -492,10 +492,12 @@ examples:
         print(f"Loading summarizer '{config.summarizer}' ...", flush=True)
         summarizer_kwargs = {"device": args.device}
         if config.summarizer == "qwen3_8b" and args.no_vllm:
-            from src.text_backends.qwen_backend import QwenSummarizer
+            from src.text_backends.qwen_backend import DEFAULT_QWEN_MODEL, QwenSummarizer
 
             summarizer = QwenSummarizer(
-                model_name=config.summarizer_model_name, device=args.device, use_vllm=False
+                model_name=config.summarizer_model_name or DEFAULT_QWEN_MODEL,
+                device=args.device,
+                use_vllm=False,
             )
         else:
             summarizer = build_summarizer(config, **summarizer_kwargs)

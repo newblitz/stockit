@@ -4,6 +4,14 @@ Prefers vLLM for batched generation; falls back to batched Hugging Face
 ``transformers`` generation when vLLM is not installed or fails to initialize
 (e.g. no compatible GPU). Both paths run in "non-thinking" mode and strip any
 ``<think>...</think>`` block defensively.
+
+T4 GPU notes
+------------
+* Use ``Qwen/Qwen3-8B-AWQ`` (AWQ 4-bit, ~4.5 GB) rather than the base fp16
+  model (~16 GB) so vLLM has enough VRAM left for the KV cache.
+* T4 does not support bfloat16 — dtype is hardcoded to float16.
+* ``enforce_eager=True`` disables CUDA-graph capture, which is unreliable on
+  T4 and causes hangs / assertion errors with some vLLM versions.
 """
 
 from __future__ import annotations
@@ -16,6 +24,10 @@ from prompts import DAILY_PROMPT_QWEN, HOURLY_PROMPT_QWEN
 from .base import Summarizer
 
 DEFAULT_QWEN_MODEL = "Qwen/Qwen3-8B"
+# AWQ-quantized variant (~4.5 GB on GPU).  Recommended for T4 / small-VRAM
+# GPUs when using vLLM; the base fp16 model (~16 GB) does not leave enough
+# room for a useful KV cache on a 16 GB card.
+DEFAULT_QWEN_AWQ_MODEL = "Qwen/Qwen3-8B-AWQ"
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
@@ -35,7 +47,7 @@ class QwenSummarizer(Summarizer):
         daily_max_tokens: int = 384,
         device: str | None = None,
         use_vllm: bool = True,
-        gpu_memory_utilization: float = 0.9,
+        gpu_memory_utilization: float = 0.85,  # leave headroom for KV cache on T4
     ) -> None:
         self.model_name = model_name
         self.dtype = dtype
@@ -68,10 +80,14 @@ class QwenSummarizer(Summarizer):
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self._engine = LLM(
             model=self.model_name,
-            dtype=self.dtype,
+            # T4 does not support bfloat16; always use float16 here.
+            dtype="float16",
             max_model_len=self.max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=True,
+            # Disable CUDA-graph capture: T4 is prone to hangs/assertion
+            # errors during graph compilation with some vLLM builds.
+            enforce_eager=True,
         )
         self._sampling_params_cls = SamplingParams
         self._backend = "vllm"

@@ -15,7 +15,7 @@ T4 GPU notes
 """
 
 from __future__ import annotations
-
+import torch
 import re
 from collections.abc import Sequence
 
@@ -91,14 +91,26 @@ class QwenSummarizer(Summarizer):
         else:
             quant_method = getattr(quantization_config, "quant_method", None)
 
+        num_gpus = torch.cuda.device_count()
+        tensor_parallel_size = min(num_gpus, 2)
+
         llm_kwargs: dict = {
-            "model": self.model_name,
-            "dtype": "float16",
-            "max_model_len": self.max_model_len,
-            "gpu_memory_utilization": gpu_memory_utilization,
-            "trust_remote_code": True,
-            "enforce_eager": True,
+              "model": self.model_name,
+              "dtype": "float16",
+              "max_model_len": self.max_model_len,
+              "gpu_memory_utilization": gpu_memory_utilization,
+              "trust_remote_code": True,
+              "enforce_eager": True,
+              "tensor_parallel_size": tensor_parallel_size,
         }
+        # llm_kwargs: dict = {
+        #     "model": self.model_name,
+        #     "dtype": "float16",
+        #     "max_model_len": self.max_model_len,
+        #     "gpu_memory_utilization": gpu_memory_utilization,
+        #     "trust_remote_code": True,
+        #     "enforce_eager": True,
+        # }
         if quant_method:
             llm_kwargs["quantization"] = quant_method
         self._engine = LLM(**llm_kwargs)

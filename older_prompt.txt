@@ -1,0 +1,18 @@
+daily=Below are chronologically ordered hourly summaries of news about {ticker_or_company}
+for one trading day. Combine them into a single daily synopsis covering the key
+factors that caused the stock price movement today. Be concise (at most 5 sentences).
+
+Hourly summaries:
+{concat_hourly}
+
+Daily synopsis:
+
+hourly=You are a financial news analyst. Below is the news about {ticker_or_company}
+published during one hour. Summarize the key factors in this information that
+could affect the stock price. Be concise (at most 3 sentences). Preserve concrete
+facts such as figures, guidance, and named events.
+
+News:
+{documents}
+
+Summary:

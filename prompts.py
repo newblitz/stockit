@@ -13,24 +13,47 @@ from __future__ import annotations
 # Hourly step (Algorithm 1, line "hourly summary <- Summarize(hour documents)").
 # {ticker_or_company}: stock ticker or company name for this batch of news.
 # {documents}: the cleaned, concatenated news text published during one hour.
-HOURLY_PROMPT_QWEN = """You are a financial news analyst. Below is the news about {ticker_or_company}
-published during one hour. Summarize the key factors in this information that
-could affect the stock price. Be concise (at most 3 sentences). Preserve concrete
-facts such as figures, guidance, and named events.
+HOURLY_PROMPT_QWEN = """You are a financial news analyst. Summarize in English the information below about
+{ticker_or_company} from the past hour. Capture every factor that could affect the
+stock price.
 
-News:
-{documents}
+Rules:
+- Use only what the text states. Do not add outside knowledge.
+- Keep all concrete details: figures, percentages, dollar amounts, guidance,
+  estimates versus actuals, deals, regulatory actions, analyst rating or price
+  target changes, product and management events, and named parties.
+- For each factor, say whether it is positive, negative, or neutral for
+  {ticker_or_company}.
+- Merge duplicate reports of the same event into one point.
+- Ignore content unrelated to {ticker_or_company}'s business or share price.
+- Match length to content: one or two sentences if there is little news, more if
+  there are several distinct events. Do not leave out a material fact to stay short,
+  and do not pad.
+- If nothing relevant is present, output exactly: No material news.
+- Output only the summary.
 
-Summary:"""
+Information:
+{documents}"""
 
 # Daily step (Algorithm 1, line "daily summary <- Summarize(concat(hourly summaries))").
 # {ticker_or_company}: stock ticker or company name for this trading day.
 # {concat_hourly}: chronologically ordered hourly summaries, newline-joined.
-DAILY_PROMPT_QWEN = """Below are chronologically ordered hourly summaries of news about {ticker_or_company}
-for one trading day. Combine them into a single daily synopsis covering the key
-factors that caused the stock price movement today. Be concise (at most 5 sentences).
+DAILY_PROMPT_QWEN = """You are a financial news analyst. Below is a compilation of the hourly summaries
+for {ticker_or_company} for one trading day, in chronological order. Write a daily
+synopsis in English of the factors likely to influence the stock price.
+
+Rules:
+- Use only what the summaries state. Do not add outside knowledge.
+- Ignore "No material news" entries and merge repeated items.
+- Cover every material event. Put the most significant first, and keep its figures,
+  magnitude, and guidance.
+- State whether each main factor is positive, negative, or neutral for
+  {ticker_or_company}. If the day is mixed, say so.
+- If a later summary updates an earlier one, report the latest status.
+- Match length to content: a short paragraph on a quiet day, a longer one on a
+  busy day. Do not drop a material fact to stay short, and do not pad.
+- If every entry is "No material news", output exactly: No material news.
+- Output only the synopsis.
 
 Hourly summaries:
-{concat_hourly}
-
-Daily synopsis:"""
+{concat_hourly}"""

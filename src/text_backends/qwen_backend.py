@@ -48,12 +48,16 @@ class QwenSummarizer(Summarizer):
         device: str | None = None,
         use_vllm: bool = True,
         gpu_memory_utilization: float = 0.85,  # leave headroom for KV cache on T4
+        hf_batch_size: int = 8,
     ) -> None:
         self.model_name = model_name
         self.dtype = dtype
         self.max_model_len = max_model_len
         self.hourly_max_tokens = hourly_max_tokens
         self.daily_max_tokens = daily_max_tokens
+        # Only used by the transformers fallback; vLLM batches everything
+        # it's given in one call and schedules it internally.
+        self.hf_batch_size = hf_batch_size
         self._backend: str | None = None
         self._tokenizer = None
         self._engine = None
@@ -67,84 +71,86 @@ class QwenSummarizer(Summarizer):
             except Exception as exc:  # pragma: no cover - depends on optional package/GPU
                 print(
                     f"[QwenSummarizer] vLLM unavailable ({exc!r}); "
-                    "falling back to transformers batched generation.",
+                    "falling back to transformers batched generation (much slower -- "
+                    "install `vllm` and, for an AWQ model, `autoawq` to avoid this).",
                     flush=True,
                 )
         if self._backend is None:
             self._init_transformers(device)
 
     def _init_vllm(self, gpu_memory_utilization: float) -> None:
-        from transformers import AutoTokenizer
+        from transformers import AutoConfig, AutoTokenizer
         from vllm import LLM, SamplingParams
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self._engine = LLM(
-            model=self.model_name,
-            # T4 does not support bfloat16; always use float16 here.
-            dtype="float16",
-            max_model_len=self.max_model_len,
-            gpu_memory_utilization=gpu_memory_utilization,
-            trust_remote_code=True,
-            # Disable CUDA-graph capture: T4 is prone to hangs/assertion
-            # errors during graph compilation with some vLLM builds.
-            enforce_eager=True,
-        )
+
+        remote_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
+        quantization_config = getattr(remote_config, "quantization_config", None)
+        if isinstance(quantization_config, dict):
+            quant_method = quantization_config.get("quant_method")
+        else:
+            quant_method = getattr(quantization_config, "quant_method", None)
+
+        llm_kwargs: dict = {
+            "model": self.model_name,
+            "dtype": "float16",
+            "max_model_len": self.max_model_len,
+            "gpu_memory_utilization": gpu_memory_utilization,
+            "trust_remote_code": True,
+            "enforce_eager": True,
+        }
+        if quant_method:
+            llm_kwargs["quantization"] = quant_method
+        self._engine = LLM(**llm_kwargs)
         self._sampling_params_cls = SamplingParams
         self._backend = "vllm"
 
     def _init_transformers(self, device: str | None) -> None:
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        if self._tokenizer.pad_token_id is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+        # Left padding is required for correct batched causal-LM generation:
+        # with right padding, every sequence's "next token" position differs,
+        # which silently produces garbage continuations for the shorter ones.
+        self._tokenizer.padding_side = "left"
 
-        # T4 does not support bfloat16 — always use float16 for compute dtype.
+        # T4 does not support bfloat16, so float16 is used for compute dtype.
         torch_dtype = torch.float16
 
-        # AWQ / GPTQ models (e.g. Qwen3-8B-AWQ) already have quantization
-        # baked into their config.json.  Passing a BitsAndBytesConfig on top
-        # of them raises:
-        #   ValueError: model is quantized with AwqConfig but you are passing
-        #   a BitsAndBytesConfig …
-        # For these models we load with device_map="auto" only; the AWQ
-        # kernel handles weight de-quantization internally.
-        #
-        # For non-pre-quantized models (the plain Qwen/Qwen3-8B base) we apply
-        # 4-bit NF4 via BitsAndBytes so the full fp16 weights (~16 GB) are
-        # reduced to ~6 GB before placement on the GPU.
-        _name_lower = self.model_name.lower()
-        _is_prequantized = any(tag in _name_lower for tag in ("awq", "gptq", "gguf"))
+        # AWQ/GPTQ-quantized checkpoints (e.g. Qwen3-8B-AWQ) already declare
+        # their own quantization_config in config.json. Passing a
+        # BitsAndBytesConfig on top of an already-quantized checkpoint raises
+        # "model is quantized with AwqConfig but you are passing a
+        # BitsAndBytesConfig". Query the model's actual remote config instead
+        # of guessing quantization from the repo name string, since a
+        # name-based heuristic misses renamed/local/mirrored AWQ checkpoints.
+        remote_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
+        already_quantized = getattr(remote_config, "quantization_config", None) is not None
 
-        if _is_prequantized:
-            # Pre-quantized: load as-is; quantization is embedded in the weights.
-            self._hf_model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                device_map="auto",
-                dtype=torch_dtype,            # `dtype` replaces deprecated `torch_dtype`
-                trust_remote_code=True,
-            )
-        else:
+        load_kwargs: dict = {
+            "device_map": "auto",
+            "dtype": torch_dtype,  # `dtype` replaces the deprecated `torch_dtype` kwarg
+            "trust_remote_code": True,
+        }
+        if not already_quantized:
             # Base / fp16 model: apply 4-bit NF4 via BitsAndBytes to fit on T4.
             from transformers import BitsAndBytesConfig
 
-            bnb_config = BitsAndBytesConfig(
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_compute_dtype=torch_dtype,
                 bnb_4bit_use_double_quant=True,
             )
-            self._hf_model = AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                quantization_config=bnb_config,
-                device_map="auto",
-                dtype=torch_dtype,            # `dtype` replaces deprecated `torch_dtype`
-                trust_remote_code=True,
-            )
 
+        self._hf_model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
         self._hf_model.eval().requires_grad_(False)
 
         # Keep a device reference for placing input tensors; the model itself
-        # is already placed by device_map="auto" — do NOT call .to() on it.
+        # is already placed by device_map="auto", so do not call .to() on it.
         self._hf_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._backend = "hf"
 
@@ -166,13 +172,22 @@ class QwenSummarizer(Summarizer):
             outputs = self._engine.generate(chat_prompts, sampling)
             raw_texts = [output.outputs[0].text for output in outputs]
         else:
+            # Batch hf_batch_size prompts per generate() call instead of one
+            # at a time: this is the main speed fix for the transformers
+            # fallback path (a per-prompt loop never uses the GPU's batch
+            # parallelism, so it is roughly hf_batch_size times slower).
             import torch
 
             raw_texts = []
             budget = max(self.max_model_len - max_tokens, 1)
-            for chat_prompt in chat_prompts:
+            for start in range(0, len(chat_prompts), self.hf_batch_size):
+                batch = chat_prompts[start : start + self.hf_batch_size]
                 tokens = self._tokenizer(
-                    chat_prompt, return_tensors="pt", truncation=True, max_length=budget
+                    batch,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=budget,
+                    padding=True,
                 ).to(self._hf_device)
                 with torch.inference_mode():
                     generated = self._hf_model.generate(
@@ -182,9 +197,12 @@ class QwenSummarizer(Summarizer):
                         temperature=None,
                         top_p=None,
                         top_k=None,
+                        pad_token_id=self._tokenizer.pad_token_id,
                     )
-                new_tokens = generated[0, tokens["input_ids"].shape[1] :]
-                raw_texts.append(self._tokenizer.decode(new_tokens, skip_special_tokens=True))
+                input_len = tokens["input_ids"].shape[1]
+                for row in generated:
+                    new_tokens = row[input_len:]
+                    raw_texts.append(self._tokenizer.decode(new_tokens, skip_special_tokens=True))
         return [_strip_think(text) for text in raw_texts]
 
     def summarize_hourly(self, texts: Sequence[str], *, ticker: str | None = None) -> list[str]:

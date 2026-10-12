@@ -12,5 +12,6 @@ scipy>=1.11
 vllm; sys_platform == "linux"      # Qwen3 batched generation (Linux + CUDA only)
 accelerate>=0.30                   # transformers fallback for QwenSummarizer
 bitsandbytes>=0.43                 # 4-bit NF4 quantization for QwenSummarizer on T4/small GPUs
+autoawq>=0.2.7; sys_platform == "linux"  # required to run Qwen/Qwen3-8B-AWQ (vLLM and transformers fallback)
 FlagEmbedding>=1.2                 # BGE-M3 dense embeddings
 sentence-transformers>=2.7         # fallback if FlagEmbedding is unavailable

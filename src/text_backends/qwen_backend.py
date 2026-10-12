@@ -94,30 +94,60 @@ class QwenSummarizer(Summarizer):
 
     def _init_transformers(self, device: str | None) -> None:
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
         # T4 does not support bfloat16 — always use float16 for compute dtype.
         torch_dtype = torch.float16
 
-        # Load Qwen3-8B in 4-bit NF4 quantization so it fits inside a 14 GB T4
-        # GPU (~6 GB quantized vs ~16 GB in fp16). BitsAndBytes handles device
-        # placement internally via device_map="auto"; calling .to(device) on a
-        # quantised model is not supported and was the source of the OOM.
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch_dtype,
-            bnb_4bit_use_double_quant=True,
+        # AWQ / GPTQ models (e.g. Qwen3-8B-AWQ) already have quantization
+        # baked into their config.json.  Passing a BitsAndBytesConfig on top
+        # of them raises:
+        #   ValueError: model is quantized with AwqConfig but you are passing
+        #   a BitsAndBytesConfig …
+        # For these models we load with device_map="auto" only; the AWQ
+        # kernel handles weight de-quantization internally.
+        #
+        # For non-pre-quantized models (the plain Qwen/Qwen3-8B base) we apply
+        # 4-bit NF4 via BitsAndBytes so the full fp16 weights (~16 GB) are
+        # reduced to ~6 GB before placement on the GPU.
+        # Inspect config rather than relying solely on the repository name:
+        # Kaggle models are often mounted under a generic local directory, so
+        # an AWQ checkpoint need not have "awq" in ``self.model_name``.
+        model_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
+        has_embedded_quantization = getattr(model_config, "quantization_config", None) is not None
+        _name_lower = self.model_name.lower()
+        _is_prequantized = has_embedded_quantization or any(
+            tag in _name_lower for tag in ("awq", "gptq", "gguf")
         )
-        self._hf_model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            quantization_config=bnb_config,
-            device_map="auto",
-            torch_dtype=torch_dtype,
-            trust_remote_code=True,
-        )
+
+        if _is_prequantized:
+            # Pre-quantized: load as-is; quantization is embedded in the weights.
+            self._hf_model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                device_map="auto",
+                dtype=torch_dtype,            # `dtype` replaces deprecated `torch_dtype`
+                trust_remote_code=True,
+            )
+        else:
+            # Base / fp16 model: apply 4-bit NF4 via BitsAndBytes to fit on T4.
+            from transformers import BitsAndBytesConfig
+
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+            self._hf_model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                quantization_config=bnb_config,
+                device_map="auto",
+                dtype=torch_dtype,            # `dtype` replaces deprecated `torch_dtype`
+                trust_remote_code=True,
+            )
+
         self._hf_model.eval().requires_grad_(False)
 
         # Keep a device reference for placing input tensors; the model itself

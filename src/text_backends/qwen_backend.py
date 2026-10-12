@@ -94,7 +94,7 @@ class QwenSummarizer(Summarizer):
 
     def _init_transformers(self, device: str | None) -> None:
         import torch
-        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
@@ -112,15 +112,8 @@ class QwenSummarizer(Summarizer):
         # For non-pre-quantized models (the plain Qwen/Qwen3-8B base) we apply
         # 4-bit NF4 via BitsAndBytes so the full fp16 weights (~16 GB) are
         # reduced to ~6 GB before placement on the GPU.
-        # Inspect config rather than relying solely on the repository name:
-        # Kaggle models are often mounted under a generic local directory, so
-        # an AWQ checkpoint need not have "awq" in ``self.model_name``.
-        model_config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
-        has_embedded_quantization = getattr(model_config, "quantization_config", None) is not None
         _name_lower = self.model_name.lower()
-        _is_prequantized = has_embedded_quantization or any(
-            tag in _name_lower for tag in ("awq", "gptq", "gguf")
-        )
+        _is_prequantized = any(tag in _name_lower for tag in ("awq", "gptq", "gguf"))
 
         if _is_prequantized:
             # Pre-quantized: load as-is; quantization is embedded in the weights.

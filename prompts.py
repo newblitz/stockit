@@ -29,7 +29,7 @@ Rules:
 - Match length to content: one or two sentences if there is little news, more if
   there are several distinct events. Do not leave out a material fact to stay short,
   and do not pad.
-- If nothing relevant is present, output exactly: No material news.
+- Be concise (at most 3 sentences),If nothing relevant is present, output exactly: No material news.
 - Output only the summary.
 
 Information:
@@ -45,7 +45,7 @@ synopsis in English of the factors likely to influence the stock price.
 Rules:
 - Use only what the summaries state. Do not add outside knowledge.
 - Ignore "No material news" entries and merge repeated items.
-- Cover every material event. Put the most significant first, and keep its figures,
+- Cover every material event. Put the most significant first, and Preserve the most important figures,
   magnitude, and guidance.
 - State whether each main factor is positive, negative, or neutral for
   {ticker_or_company}. If the day is mixed, say so.
@@ -53,6 +53,7 @@ Rules:
 - Match length to content: a short paragraph on a quiet day, a longer one on a
   busy day. Do not drop a material fact to stay short, and do not pad.
 - If every entry is "No material news", output exactly: No material news.
+- Be concise (at most 5 sentences)
 - Output only the synopsis.
 
 Hourly summaries:

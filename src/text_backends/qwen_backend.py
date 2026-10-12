@@ -29,7 +29,7 @@ class QwenSummarizer(Summarizer):
         self,
         model_name: str = DEFAULT_QWEN_MODEL,
         *,
-        dtype: str = "bfloat16",
+        dtype: str = "float16",  # T4 does not support bfloat16; use float16
         max_model_len: int = 8192,
         hourly_max_tokens: int = 256,
         daily_max_tokens: int = 384,
@@ -78,16 +78,35 @@ class QwenSummarizer(Summarizer):
 
     def _init_transformers(self, device: str | None) -> None:
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        torch_dtype = getattr(torch, self.dtype, torch.bfloat16)
+
+        # T4 does not support bfloat16 — always use float16 for compute dtype.
+        torch_dtype = torch.float16
+
+        # Load Qwen3-8B in 4-bit NF4 quantization so it fits inside a 14 GB T4
+        # GPU (~6 GB quantized vs ~16 GB in fp16). BitsAndBytes handles device
+        # placement internally via device_map="auto"; calling .to(device) on a
+        # quantised model is not supported and was the source of the OOM.
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch_dtype,
+            bnb_4bit_use_double_quant=True,
+        )
         self._hf_model = AutoModelForCausalLM.from_pretrained(
-            self.model_name, torch_dtype=torch_dtype, trust_remote_code=True
+            self.model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
         )
         self._hf_model.eval().requires_grad_(False)
+
+        # Keep a device reference for placing input tensors; the model itself
+        # is already placed by device_map="auto" — do NOT call .to() on it.
         self._hf_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        self._hf_model.to(self._hf_device)
         self._backend = "hf"
 
     def _to_chat_prompt(self, prompt: str) -> str:

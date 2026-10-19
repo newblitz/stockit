@@ -400,20 +400,17 @@ def has_publication_timestamps(dataset_root: Path) -> bool:
 def lightgbm_gpu_predict(
     X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray, y_val: np.ndarray, X_test: np.ndarray, *, seed: int
 ) -> tuple[np.ndarray, np.ndarray, str]:
-    """Two-GPU Dask LightGBM with validation-MCC early stopping.
+    """Two independent GPU LightGBM fits, averaged as a two-T4 ensemble.
 
-    Kaggle's stock LightGBM wheel is often CPU-only.  This intentionally fails
-    rather than silently using CPU; install a CUDA-enabled LightGBM/Dask-CUDA
-    image before running if those imports are unavailable.
+    LightGBM's Dask multi-machine transport is unstable on Kaggle's paired
+    T4/OpenCL image (workers can reset their peer socket during iteration 1).
+    Independent, identical-protocol fits avoid that network layer entirely,
+    use each GPU, and cannot silently fall back to CPU.
     """
     try:
-        import dask.array as da
-        from dask.distributed import Client
-        from dask_cuda import LocalCUDACluster
         import lightgbm as lgb
-        from lightgbm.dask import DaskLGBMClassifier
     except ImportError as exc:
-        raise RuntimeError("LightGBM GPU diagnostic requires dask-cuda and a CUDA-enabled lightgbm build in Kaggle") from exc
+        raise RuntimeError("LightGBM GPU diagnostic requires a CUDA-enabled lightgbm build in Kaggle") from exc
 
     def mcc_metric(y_true, probability):
         # LightGBM invokes this only on the validation fold for early stopping.
@@ -424,28 +421,20 @@ def lightgbm_gpu_predict(
         denom = float((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5
         return "mcc", 0.0 if denom == 0 else (tp * tn - fp * fn) / denom, True
 
-    cluster = LocalCUDACluster(CUDA_VISIBLE_DEVICES="0,1")
-    client = Client(cluster)
-    try:
-        chunks = max(1, len(X_train) // 2)
-        train_x = da.from_array(X_train, chunks=(chunks, X_train.shape[1]))
-        train_y = da.from_array(y_train, chunks=(chunks,))
-        val_x = da.from_array(X_val, chunks=(max(1, len(X_val) // 2), X_val.shape[1]))
-        val_y = da.from_array(y_val, chunks=(max(1, len(X_val) // 2),))
-        model = DaskLGBMClassifier(
-            objective="binary", metric="None", device_type="gpu", tree_learner="data",
+    val_probabilities, test_probabilities, iterations = [], [], []
+    for gpu_device_id, model_seed in enumerate((seed, seed + 1)):
+        model = lgb.LGBMClassifier(
+            objective="binary", metric="None", device_type="gpu",
             n_estimators=2000, learning_rate=0.03, num_leaves=31, feature_fraction=0.8,
-            bagging_fraction=0.8, bagging_freq=1, random_state=seed, n_jobs=2,
+            bagging_fraction=0.8, bagging_freq=1, random_state=model_seed,
+            gpu_device_id=gpu_device_id, n_jobs=1,
         )
-        model.fit(train_x, train_y, eval_set=[(val_x, val_y)], eval_metric=mcc_metric,
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], eval_metric=mcc_metric,
                   callbacks=[lgb.early_stopping(80, first_metric_only=True, verbose=False)])
-        val_probability = model.predict_proba(val_x)[:, 1].compute()
-        test_x = da.from_array(X_test, chunks=(max(1, len(X_test) // 2), X_test.shape[1]))
-        test_probability = model.predict_proba(test_x)[:, 1].compute()
-        return np.asarray(val_probability), np.asarray(test_probability), f"best_iter={model.best_iteration_}"
-    finally:
-        client.close()
-        cluster.close()
+        val_probabilities.append(model.predict_proba(X_val)[:, 1])
+        test_probabilities.append(model.predict_proba(X_test)[:, 1])
+        iterations.append(str(model.best_iteration_))
+    return np.mean(val_probabilities, axis=0), np.mean(test_probabilities, axis=0), f"2-GPU ensemble; best_iter={','.join(iterations)}"
 
 
 def select_threshold(y: np.ndarray, probability: np.ndarray, device: torch.device) -> float:

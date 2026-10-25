@@ -18,6 +18,7 @@ HOURLY_PROMPT_QWEN = """You are a financial news analyst. Summarize in English t
 stock price.
 
 Rules:
+
 - Use only what the text states. Do not add outside knowledge.
 - Keep all concrete details: figures, percentages, dollar amounts, guidance,
   estimates versus actuals, deals, regulatory actions, analyst rating or price
@@ -29,7 +30,7 @@ Rules:
 - Match length to content: one or two sentences if there is little news, more if
   there are several distinct events. Do not leave out a material fact to stay short,
   and do not pad.
-- Be concise (at most 3 sentences),If nothing relevant is present, output exactly: No material news.
+-Even if the news is minor or only loosely related, write one sentence stating what it reports and how relevant it is to {ticker_or_company}’s stock (high, medium, or low)
 - Output only the summary.
 
 Information:
@@ -52,8 +53,7 @@ Rules:
 - If a later summary updates an earlier one, report the latest status.
 - Match length to content: a short paragraph on a quiet day, a longer one on a
   busy day. Do not drop a material fact to stay short, and do not pad.
-- If every entry is "No material news", output exactly: No material news.
-- Be concise (at most 5 sentences)
+-If the day's items are minor, write a short synopsis of what was reported and state that the overall impact is low.
 - Output only the synopsis.
 
 Hourly summaries:

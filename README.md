@@ -1,7 +1,6 @@
 # Hierarchical Text–Price Co-Attention for Stock Trend Prediction
 
-This repository is a PyTorch implementation of the model described in
-[`paper/paper.md`](paper/paper.md), *Integrative stock price trend prediction
+ Integrative stock price trend prediction
 via hierarchical LLM text processing and patch-based transformer with
 co-attention* (Zhang, Dong, and Xu, 2026). It is set up to train on the public
 [CMIN Dataset](https://github.com/BigRoddy/CMIN-Dataset), starting with

@@ -1,394 +1,175 @@
-# Hierarchical Text–Price Co-Attention for Stock Trend Prediction
+# Regime-Aware Text–Price Co-Attention
 
- Integrative stock price trend prediction
-via hierarchical LLM text processing and patch-based transformer with
-co-attention. It is set up to train on the public
-[CMIN Dataset](https://github.com/BigRoddy/CMIN-Dataset), starting with
-CMIN-US.
+Regime-Aware Text–Price Co-Attention stock-trend prediction model.
 
-This document is the handoff document for future agents and contributors.
-Read it before changing the training path: there are older, incompatible
-files in `src/` (documented below), and the root-level pipeline is the
-authoritative one.
 
-## What is implemented
+The model combines historical market data with daily financial-news
+representations to predict the next-day market movement. It is designed for
+the [CMIN dataset](https://github.com/BigRoddy/CMIN-Dataset), but the
+architecture is not limited to one stock universe.
 
-The canonical pipeline follows the paper in four stages:
+## Updated architecture
 
 ```text
-CMIN news JSONL                  CMIN processed price TSV
-       |                                     |
-hourly mT5 summaries                    per-stock z-score
-       |                                     |
-daily mT5 summary                         30-day window
-       |                                     |
-daily frozen mT5 embedding                 |
-       +----------> price-to-text alignment+
-                                      |
-                  two single-channel patch Transformers
-                                      |
-                 stacked bidirectional co-attention
-                                      |
-             flatten -> linear classifier -> next-day up probability
+Historical price features ──┬──> Price patch Transformer ────────┐
+                             │                                    │
+                             └──> Market Regime Encoder ──> gate │
+                                                                  │
+News ─> Qwen3-8B summaries ─> BGE-M3 embeddings ─> Text encoder ─┤
+                                                                  │
+                         Regime-aware bidirectional co-attention ─┘
+                                             │
+                                  Classifier / next-day probability
 ```
 
-The frozen summarizer is executed once when building an embedding cache, not
-inside every training epoch. The neural encoder, co-attention, and classifier
-are the trainable parts.
+The text-processing models are frozen during classifier training. The
+price encoder, market-regime encoder, co-attention fusion layers, and
+classifier are trainable.
 
-## Canonical files
+## Main model components
 
-| File | Purpose |
-| --- | --- |
-| `config.py` | Paper-default hyperparameters: 30 days, patch 10, stride 5, `d_model=128`, `d_ff=256`, 16 heads, 4 encoder layers, 2 co-attention blocks, dropout 0.2, 20 epochs. |
-| `src/model.py` | Trainable architecture. `HierarchicalCoAttentionStockPredictor.forward()` returns logits, while `predict_proba()` applies sigmoid. |
-| `src/summarization.py` | Frozen two-stage mT5 XL-Sum summarizer and mean-pooled encoder embedding extractor. |
-| `src/data.py` | Official CMIN TSV reader, per-stock train-only standardization, chronological splits, and 30-day windows. |
-| `prepare_embeddings.py` | Precomputes and saves a `[trading_days, 768]` embedding cache per ticker. |
-| `train.py` | The **authoritative training entry point**: train/validation loop, metrics, logs, and checkpoints. |
-| `tests/test_model.py` | Shape and backward-pass smoke tests. |
-| `paper/paper.md` | Local copy of the paper and the source of architecture/hyperparameter decisions. |
+### 1. Price feature encoder
 
-### Legacy files — do not use for the current run
+The model receives a rolling window of historical price features. Each price
+feature is treated as a separate channel and divided into overlapping
+patches. A patch-based Transformer learns temporal patterns such as momentum,
+trend, and short-term changes.
 
-`main.py`, `src/dataset.py`, `src/technical_indicators.py`, and `src/train.py`
-belong to an older, incompatible approach. They expect a `StockModel` class
-and compute 17 engineered indicators, but `src/model.py` now exports
-`HierarchicalCoAttentionStockPredictor` and the canonical CMIN pipeline uses
-the official six numerical price columns. As written, `python main.py` is not
-the supported command and may fail. Do not mix its data loader or checkpoints
-with the root-level `train.py` pipeline.
+### 2. Qwen3-8B market-news summarizer
 
-## Repository file structure
+The original mT5-XLSum summarizer has been replaced with **Qwen3-8B**.
+
+Qwen3 processes the available financial news in a hierarchical sequence:
+
+1. News items are grouped into hourly documents.
+2. Hourly documents are summarized.
+3. The hourly summaries are combined into a daily summary.
+
+The daily summary is produced once during cache construction rather than
+inside every training step. Qwen3 is used in non-thinking/instruction mode,
+and the generated summaries are kept frozen during downstream training.
+
+### 3. BGE-M3 embedding model
+
+The original mT5 encoder embeddings have been replaced with dense
+**BGE-M3** embeddings (`BAAI/bge-m3`).
+
+BGE-M3 converts each daily Qwen3 summary into a 1,024-dimensional vector.
+The vector is normalized and then projected to the price representation width
+before text–price interaction. This projection allows the downstream model to
+remain independent of the embedding dimensionality.
+
+### 4. Text and price encoders
+
+The price sequence and the daily text embeddings are encoded separately:
+
+- The **price encoder** learns temporal structure from patchified market
+  features.
+- The **text encoder** learns a compatible representation for the daily
+  news context.
+- A price-to-text alignment layer projects text features to the price feature
+  width before cross-modal encoding.
+
+## Updated co-attention fusion
+
+The original fusion block used fixed bidirectional co-attention. The updated
+fusion is market-regime aware and contains two additions.
+
+### 1. Market Regime Encoder
+
+The **Market Regime Encoder** learns the current market condition from
+historical price features. It represents the market context using three
+regime states:
+
+- **Low volatility**
+- **Medium volatility**
+- **High volatility**
+
+The encoder uses the historical price window to produce a continuous regime
+representation and regime probabilities. This context is supplied to every
+co-attention fusion block.
+
+The regime representation helps the model distinguish, for example, between
+a news signal occurring during a stable market and the same signal occurring
+during a highly volatile market.
+
+### 2. Dynamic Gating Mechanism
+
+The co-attention block still computes both interaction directions:
+
+- **Text-to-price attention:** text queries the price representation.
+- **Price-to-text attention:** price queries the text representation.
+
+The difference is that their contribution is no longer combined with a fixed
+fusion rule. A regime-conditioned gating network uses the market context to
+calculate adaptive weights for the two streams:
 
 ```text
-major/
-├── README.md                    # Project overview and handoff notes (this file)
-├── HOW_TO_RUN.md                # Step-by-step run instructions (local + Kaggle)
-├── requirements.txt             # Python dependencies
-├── config.py                    # Paper-default hyperparameters
-│
-├── prepare_embeddings.py        # Step 1: build frozen mT5 text-embedding caches
-├── train.py                     # Step 2: train/validate the co-attention model
-├── main.py                      # LEGACY — do not use
-│
-├── src/
-│   ├── __init__.py
-│   ├── model.py                 # HierarchicalCoAttentionStockPredictor (canonical)
-│   ├── data.py                  # CMIN loader, splits, 30-day windows (canonical)
-│   ├── summarization.py         # HierarchicalSummarizer / Algorithm 1 (canonical)
-│   ├── dataset.py               # LEGACY — old data loader
-│   ├── train.py                 # LEGACY — old training loop
-│   └── technical_indicators.py  # LEGACY — 17 engineered indicators
-│
-├── tests/
-│   └── test_model.py            # Shape and backward-pass smoke tests
-│
-├── paper/
-│   ├── paper.md                 # Local copy of the paper
-│   └── fig*.png                 # Paper figures
-│
-├── data/
-│   ├── CMIN-Dataset-official/   # Official CMIN download (default dataset root)
-│   │   └── CMIN-US/
-│   │       ├── price/
-│   │       │   ├── processed/   # <TICKER>.txt — one row per trading day
-│   │       │   └── raw/         # Raw price CSVs (not used by train.py)
-│   │       └── news/
-│   │           ├── preprocessed/# <TICKER>/<YYYY-MM-DD> — JSONL news per day
-│   │           └── raw/         # Raw news CSVs (not used by train.py)
-│   └── cache/
-│       └── cmin-us-mt5/         # Precomputed text embeddings (created by prepare_embeddings.py)
-│           └── <TICKER>.pt      # {dates, embeddings [trading_days, 768]}
-│
-├── checkpoints/
-│   └── cmin-us/                 # Training outputs (created by train.py)
-│       ├── best.pt              # Best by validation MCC (primary checkpoint)
-│       ├── best_accuracy.pt     # Best by validation accuracy
-│       ├── last.pt              # Most recent epoch
-│       ├── history.json         # Per-epoch metrics
-│       ├── history.csv          # Same metrics, spreadsheet-friendly
-│       └── metrics.json         # Final epoch summary
-│
-└── logs/                        # Optional training/embedding logs (--log-file)
+market regime context
+          │
+          v
+dynamic gate ──> text-to-price contribution
+             └─> price-to-text contribution
 ```
 
-Paths under `data/`, `checkpoints/`, and `logs/` are created at runtime and may
-be empty in a fresh clone. Override dataset, cache, and checkpoint locations with
-`--dataset-root`, `--cache-root`, and `--checkpoint-dir` (see
-[`HOW_TO_RUN.md`](HOW_TO_RUN.md)).
+In low-volatility conditions, the gate can emphasize stable cross-modal
+relationships. In high-volatility conditions, it can increase or reduce the
+contribution of either attention direction depending on the learned market
+context. The gate is learned jointly with the rest of the trainable model.
 
-## Model mapping to the paper
+The gated streams are concatenated or combined, passed through the fusion
+projection, and then processed by residual connections, layer normalization,
+and a feed-forward network.
 
-`src/model.py` implements the following paper components.
+## End-to-end data flow
 
-| Paper section/equations | Code | Result |
+For each stock and trading-day window:
+
+1. Historical price features are normalized using the training split.
+2. The price window is processed by the patch Transformer.
+3. Historical prices are also passed to the Market Regime Encoder.
+4. News is summarized hierarchically with frozen Qwen3-8B.
+5. Daily summaries are converted to normalized BGE-M3 embeddings.
+6. Text embeddings are projected to the price representation width.
+7. Price-to-text and text-to-price attention are computed.
+8. The regime-conditioned gate dynamically weights both attention streams.
+9. The fused representation is passed through the classifier.
+10. The output is a next-day upward-movement logit or probability.
+
+## What changed from the original model
+
+| Area | Original pipeline | Updated pipeline |
 | --- | --- | --- |
-| §3.2, Algorithm 1 | `HierarchicalSummarizer` | Hourly news → hourly summaries → daily summary → frozen daily embedding. |
-| §3.3, Eq. 1–3 | `PriceTextAlignment` | Text is linearly projected to price width; price queries text through scaled dot-product cross-attention. |
-| §3.3, Eq. 4–7 | `SingleChannelPatchTransformer` | Each price feature becomes a separate channel; overlap patches are projected, position-embedded, and self-attended. |
-| §3.4, Eq. 8–13 | `BidirectionalCoAttention` | Text queries price and price queries text. Their outputs are fused, residual-connected to price, normalized, and passed through an FFN. |
-| §3.5, Eq. 14–16 | classifier in `HierarchicalCoAttentionStockPredictor` | Feature, patch, and channel dimensions are flattened into one binary logit. Training uses `BCEWithLogitsLoss`. |
+| News summarizer | mT5-XLSum | Qwen3-8B |
+| Daily text embedding | mT5 encoder, 768 dimensions | BGE-M3, 1,024 dimensions |
+| Text embedding handoff | mT5-sized input | Dimension inferred from the cache and projected to price width |
+| Co-attention fusion | Fixed bidirectional fusion | Market-regime-conditioned dynamic fusion |
+| Market context | Not explicitly modeled | Low-, medium-, and high-volatility regime representation |
+| Attention contribution | Static | Dynamically regulated by the market regime |
+| Frozen components | mT5 summarizer and encoder | Qwen3 summarizer and BGE-M3 embedder |
 
-### Tensor shapes
+The change in text models does not alter the downstream classifier interface:
+the text representation is projected before co-attention, so the model can
+consume either the original or updated cache format when the corresponding
+configuration is selected.
 
-For a batch of `B` samples with the CMIN-US processed files:
+## Key implementation areas
 
-```text
-prices           [B, 30, 6]
-text_embeddings  [B, 30, 768]
-aligned text     [B, 30, 6]
-patch streams    [B * 6, 6, 128]  # six patches: floor((30 - 10) / 5) + 2
-logits           [B, 1]
-labels           [B, 1]
-```
-
-`text_embedding_dim` is inferred from cache files at training time, so a
-different cached text encoder can be used as long as all ticker caches have
-the same embedding width.
-
-## Data layout and semantics
-
-The complete official CMIN-US download is expected here:
-
-```text
-data/CMIN-Dataset-official/CMIN-US/
-├── price/processed/<TICKER>.txt
-└── news/preprocessed/<TICKER>/<YYYY-MM-DD>
-```
-
-The official processed price files have a date and six numerical values. The
-first value is the supplied close-to-close movement percentage and is used to
-make the next-day label:
-
-```text
-label = 1 if next_day_raw_movement > 0 else 0
-```
-
-It is important that labels use the **raw**, unstandardized movement; this is
-handled in `src/data.py`. All six input price columns are z-scored separately
-for each stock using only dates through 2020-06-30. This prevents test-period
-normalization leakage.
-
-The target-day chronological split is:
-
-| Split | Target date range |
+| Path | Responsibility |
 | --- | --- |
-| Train | 2018-01-01 to 2020-06-30 |
-| Validation | 2020-07-01 to 2020-12-31 |
-| Test | 2021-01-01 to 2021-12-31 |
+| `config.py` | Model hyperparameters and Qwen3/BGE-M3 backend selection |
+| `src/text_backends/qwen_backend.py` | Frozen Qwen3 summarization |
+| `src/text_backends/bge_backend.py` | Frozen BGE-M3 dense embeddings |
+| `src/text_backends/factory.py` | Text-backend construction and embedding dimensions |
+| `scripts/build_text_cache.py` | Resumable summary and embedding-cache creation |
+| `src/model.py` | Price encoder, text alignment, co-attention, and classifier |
+| `src/data.py` | Price/text window loading and cache-dimension inference |
 
-A validation/test window can contain earlier historical days, but its label is
-only included in the named target range. This preserves useful lookback
-context without leaking future observations.
+## Design principles
 
-## Setup
-
-Use Python 3.10+ and install dependencies:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-The summarizer needs internet access the first time it downloads
-`csebuetnlp/mT5_multilingual_XLSum`. This is the valid public Hugging Face
-identifier. The paper/config’s earlier `...-base-cased` form was invalid and
-has been corrected. An `HF_TOKEN` is optional, but avoids Hugging Face
-anonymous rate limits.
-
-If CMIN-US is not already present, fetch the official public dataset without
-overwriting another local copy:
-
-```bash
-git clone --depth 1 --filter=blob:none --sparse \
-  https://github.com/BigRoddy/CMIN-Dataset.git data/CMIN-Dataset-official
-git -C data/CMIN-Dataset-official sparse-checkout set CMIN-US
-```
-
-CMIN-CN is not yet wired as a one-command default, although the loader accepts
-any root with the same `price/processed` and `news/preprocessed` layout. To
-use it, sparsely fetch `CMIN-CN` and supply explicit `--dataset-root`,
-`--cache-root`, and `--checkpoint-dir` paths.
-
-## Runbook
-
-### 1. Verify code before a long job
-
-```bash
-python -m pytest -q
-```
-
-Expected result: the model shape/backward tests pass.
-
-### 2. Build text-embedding caches
-
-Embedding creation is the slowest stage because it invokes a frozen mT5 model
-twice per trading day. It creates a resumable per-ticker artifact:
-
-```text
-data/cache/cmin-us-mt5/AAPL.pt
-```
-
-Start with one ticker:
-
-```bash
-python prepare_embeddings.py --ticker AAPL --device cpu
-```
-
-On a CUDA-capable machine, omit `--device cpu` or specify `--device cuda`.
-To cache every CMIN-US ticker, run:
-
-```bash
-python prepare_embeddings.py
-```
-
-Existing cache files are skipped. Do not delete a cache unless you deliberately
-want to regenerate it with different prompts/model settings.
-
-### 3. Train
-
-An AAPL-only smoke/training run (the first ticker alphabetically) is useful to
-verify the complete workflow:
-
-```bash
-python train.py --max-stocks 1 --log-file logs/cmin-us-aapl-training.log
-```
-
-After text caches have been prepared for all 110 tickers, run the full CMIN-US
-experiment:
-
-```bash
-python train.py --log-file logs/cmin-us-training.log
-```
-
-Useful overrides:
-
-```bash
-python train.py --epochs 5 --batch-size 32 --device cpu --max-stocks 1
-```
-
-### 4. Monitor an active run
-
-```bash
-tail -f logs/cmin-us-aapl-training.log
-ls -lh checkpoints/cmin-us
-```
-
-Epoch output includes elapsed time, learning rate, train/validation loss,
-accuracy, and Matthews correlation coefficient (MCC). Example:
-
-```text
-Epoch 003/20 | 24.8s | train loss 0.6812, acc 0.5530, MCC 0.1021 |
-val loss 0.6694, acc 0.5897, MCC 0.1782 | lr 1.00e-04 |
-saved best.pt (MCC), saved best_accuracy.pt
-```
-
-If a prior agent started background preparation/training, first inspect it
-instead of launching a duplicate job:
-
-```bash
-ps -ax | rg 'prepare_embeddings|train.py'
-```
-
-## Training artifacts and checkpoint policy
-
-The root training script creates the supplied checkpoint directory (default:
-`checkpoints/cmin-us`) and writes:
-
-| Artifact | Meaning |
-| --- | --- |
-| `last.pt` | Latest completed epoch; overwritten each epoch. |
-| `best.pt` | Model selected by highest **validation MCC**. This is the primary best checkpoint because MCC is a paper metric and is robust to class imbalance. |
-| `best_accuracy.pt` | Model selected by highest validation accuracy. |
-| `history.json` | Full list of epoch metric dictionaries, rewritten after every epoch. |
-| `history.csv` | Spreadsheet-friendly version of the same full history. |
-| `metrics.json` | Validation-selected checkpoint's one-time held-out test summary. |
-
-Every `.pt` checkpoint contains `model_state_dict`, `optimizer_state_dict`,
-the serialized `Config`, the epoch summary, and metric history. Restore the
-primary checkpoint as follows (construct with the same dimensions first):
-
-```python
-import torch
-from src.model import HierarchicalCoAttentionStockPredictor
-
-checkpoint = torch.load("checkpoints/cmin-us/best.pt", map_location="cpu", weights_only=False)
-model = HierarchicalCoAttentionStockPredictor(
-    text_embedding_dim=checkpoint["config"]["text_embedding_dim"],
-    price_dim=checkpoint["config"]["price_dim"],
-)
-model.load_state_dict(checkpoint["model_state_dict"])
-model.eval()
-```
-
-When restoring a model trained from data, prefer reading the dimensions from a
-cache file/dataset or the checkpoint’s saved configuration. If an experiment
-used a non-default architecture, recreate it with all matching arguments
-(`seq_len`, patch settings, widths, heads, layers, and dropout) before loading.
-
-## Important implementation choices and limitations
-
-- The paper describes equations and hyperparameters but does not publish the
-  authors’ source implementation. This code is a faithful, documented PyTorch
-  interpretation, not a byte-for-byte official reproduction.
-- `SingleChannelPatchTransformer` uses right replication padding by `stride`.
-  This produces the paper’s patch-count formula: `floor((L - P) / S) + 2`.
-- The paper does not prescribe generation length; summarization uses a bounded
-  `summary_max_new_tokens=64` to make cache creation tractable.
-- mT5 embedding generation on CPU is expensive. A GPU is strongly recommended
-  for full CMIN-US/CMIN-CN preprocessing. Caches are deliberately separate
-  from source data and can be reused between neural-model experiments.
-- `train.py` builds non-overlapping train/validation/test windows, selects
-  `best.pt` using validation MCC, then evaluates the test split exactly once.
-- News availability is based on source timestamps treated as UTC and converted
-  to the exchange timezone.  Articles after the regular close are moved to the
-  next trading session, so they cannot enter an earlier same-day decision.
-- Run `python evaluate_checkpoint.py --checkpoint checkpoints/cmin-us/best.pt`
-  for held-out ACC/MCC, the specified long/cash simulation, and latency. Run
-  `python run_ten_seeds.py` for the ten-seed aggregate; `--compare-summary`
-  additionally performs paired t-tests against a baseline or ablation run.
-- CMIN-US is the active default. CMIN-CN requires downloading its separate
-  directory and building a separate text cache/checkpoint path.
-
-## Alternative frozen text backends (Qwen3 + BGE-M3)
-
-`prepare_embeddings.py` itself is unchanged and always uses mT5, so the
-already-built `data/cache/cmin-us-mt5/` caches and any checkpoint trained
-from them remain fully reproducible. Separately, `config.py`'s `summarizer`/
-`embedder` switches and the new `scripts/build_text_cache.py` cache builder
-default to **Qwen3-8B** (summarizer) and **BGE-M3** (embedder) instead of
-mT5, built behind the same cache-file contract so nothing downstream
-(`src/model.py`, `src/data.py`, `train.py`) needed to change:
-
-- `config.py`'s `Config.summarizer`/`Config.embedder` default to
-  `"qwen3_8b"`/`"bge_m3"`. Pass `--summarizer mt5_xlsum --embedder
-  mt5_encoder` to `scripts/build_text_cache.py` for the original mT5
-  baseline instead (replace.md's config A).
-- `src/text_backends/` implements `Summarizer`/`Embedder` interfaces with
-  `MT5Summarizer`/`MT5Embedder` (wrapping the existing frozen code) and
-  `QwenSummarizer` (vLLM, HF-`transformers` fallback) / `BGEM3Embedder`
-  (`FlagEmbedding`, `sentence-transformers` fallback) implementations.
-- `scripts/build_text_cache.py` builds a resumable, namespaced
-  (`data/cache/<summarizer>_<embedder>/`, i.e. `data/cache/qwen3_8b_bge_m3/`
-  by default) text + embedding cache with the same
-  `{dates, embeddings, preprocessing_version}` `.pt` format `src/data.py`
-  already reads, so `train.py --cache-root data/cache/<summarizer>_<embedder>`
-  works unmodified against any backend combination (`text_embedding_dim` is
-  inferred from the cache: 1024 for BGE-M3, 768 for mT5).
-
-See [`CHANGES_TEXT_BACKENDS.md`](CHANGES_TEXT_BACKENDS.md) for the full file
-list, every config/dependency change, and the exact commands to build each
-cache and train/evaluate it.
-
-## Current handoff checklist
-
-Before making changes, a future agent should:
-
-1. Read this README and `paper/paper.md`.
-2. Use root-level `prepare_embeddings.py` and `train.py` (`main.py` delegates
-   to the same trainer for compatibility).
-3. Check for active embedding/training processes before starting new ones.
-4. Preserve `data/CMIN-Dataset-official` and cached `.pt` files; they are
-   large, expensive to regenerate, and may have been created by a prior agent.
-5. Keep validation MCC as the primary checkpoint-selection criterion unless a
-   deliberate experiment changes the protocol.
+- Keep large language models outside the training loop.
+- Keep summarization and embedding caches reproducible and inspectable.
+- Let the price representation provide explicit market-regime context.
+- Adapt cross-modal fusion to the current market condition.
+- Preserve a dimension-independent interface between text embeddings and the
+  trainable price model.

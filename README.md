@@ -165,6 +165,15 @@ configuration is selected.
 | `src/model.py` | Price encoder, text alignment, co-attention, and classifier |
 | `src/data.py` | Price/text window loading and cache-dimension inference |
 
+## Results
+
+On the evaluated stock-trend prediction task, the updated model achieved:
+
+| Metric | Score |
+| --- | ---: |
+| Accuracy (ACC) | **65.3%** |
+| Matthews Correlation Coefficient (MCC) | **0.319** |
+
 ## Design principles
 
 - Keep large language models outside the training loop.

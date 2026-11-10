@@ -10,6 +10,7 @@ architecture is not limited to one stock universe.
 
 ## Updated architecture
 
+![Model architecture](archietecture/regime_aware_coattention_architecture.png)
 ```text
 Historical price features ──┬──> Price patch Transformer ────────┐
                              │                                    │

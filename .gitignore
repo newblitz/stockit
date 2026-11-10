@@ -52,3 +52,12 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+HOW_TO_RUN.md
+changes.md
+data_distribution.txt
+older_prompt.txt
+replace.md
+stats_for_17.txt
+stats_for_6_for_20epocs.txt
+stats_for_price_only.txt
+stats_for_text_only.txt
